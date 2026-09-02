@@ -6,7 +6,7 @@ Tracks what has actually been built, phase by phase, against
 | Phase | Scope                          | Status         |
 | ----- | ------------------------------ | -------------- |
 | 1     | Project foundation             | ✅ Complete    |
-| 2     | Supabase + Authentication      | ⬜ Not started |
+| 2     | Supabase + Authentication      | ✅ Complete    |
 | 3     | Database schema + RLS          | ⬜ Not started |
 | 4     | Personal expense tracking      | ⬜ Not started |
 | 5     | Groups                         | ⬜ Not started |
@@ -113,3 +113,134 @@ interactive primitives are actually needed, rather than up front.
   token names are shadcn-compatible so its components can be dropped in later.
 - **Lazy environment validation** — validating at import time would crash pages
   that do not need Supabase at all while integrations are still being built.
+
+---
+
+## Phase 2 — Supabase + Authentication (complete, 2 September 2026)
+
+Sign up, sign in, sign out, persistent sessions, user profiles and protected
+routes. No expense, group or budget features — those start in Phase 4.
+
+### Database foundation
+
+`supabase/migrations/0001_profiles.sql`, written to be re-runnable:
+
+- **`profiles`** — `id` (FK to `auth.users`, cascade delete), `name`, `email`,
+  `created_at`, `updated_at`, with a name length check and an email format
+  check. Unique index on `lower(email)`.
+- **`handle_new_user()`** — an `after insert` trigger on `auth.users` creates the
+  profile as part of sign up, taking the name from the sign-up metadata and
+  falling back to the email's local part. `security definer` with
+  `search_path = ''` so it cannot be hijacked.
+- **`handle_user_email_change()`** — keeps `profiles.email` in step with the auth
+  email.
+- **`profiles_pin_identity_columns()`** — a before-update trigger that resets
+  `id`, `email` and `created_at` to their old values, so only `name` is
+  user-editable even if a crafted update gets through.
+- **`set_updated_at()`** — a shared helper the later tables will reuse.
+- **RLS** — enabled, with select-own and update-own policies for `authenticated`.
+  There is deliberately no insert policy (the sign-up trigger owns creation) and
+  no delete policy (profiles go with the cascade). `anon` is revoked entirely.
+
+`supabase/README.md` documents three ways to apply migrations and the two
+Supabase dashboard settings the app depends on.
+
+### Supabase wiring
+
+- `src/lib/supabase/server.ts` — request-scoped `createServerClient` reading and
+  writing cookies through `next/headers`. A new client per request; never shared.
+- `src/types/database.ts` — hand-written in the shape the Supabase CLI emits, so
+  `supabase gen types` can replace it later without changing call sites.
+- No browser client yet: authentication runs entirely through Server Actions, so
+  adding one now would be unused code.
+
+### Session handling and route protection
+
+- `src/proxy.ts` (Next 16 renamed `middleware` to `proxy`) refreshes the session
+  on every request and writes rotated tokens back — Server Components cannot set
+  cookies, so this is the only place a refresh survives. It also carries those
+  cookies onto redirect responses so a refresh is not dropped mid-redirect, and
+  applies the no-store headers the library supplies so a rotated session cannot
+  be cached by a CDN.
+- Routes are **private by default**: only `/`, `/sign-in`, `/sign-up` and
+  `/auth/*` are public. New pages are protected without anyone remembering to
+  add them to a list.
+- Signed-in users hitting `/sign-in` or `/sign-up` are sent to `/dashboard`.
+- `src/lib/auth/dal.ts` is the real check, not the proxy. `getUser()` uses
+  Supabase's `getUser()` (revalidates the token with the auth server) rather
+  than `getSession()` (trusts the cookie), memoised per render with React
+  `cache()`. Pages call `requireUser()` / `requireProfile()`.
+
+### Authentication flows
+
+- **Sign up** — Zod-validated, passes the name as user metadata for the trigger,
+  and sets `emailRedirectTo` to `/auth/confirm` on the request's own origin. If
+  the project requires email confirmation the form switches to a "check your
+  inbox" state; if not, the user is signed straight in.
+- **Sign in** — email/password, with an optional `?next=` destination.
+- **Sign out** — a Server Action posted from a plain form, so it works without
+  client-side JavaScript.
+- **`/auth/confirm`** — verifies the emailed one-time token (`verifyOtp`) against
+  a whitelist of link types and establishes the session. Expired or malformed
+  links land on `/sign-in?error=invalid_link` with an explanation.
+- **Profile name** — editable from `/settings`; the action derives the user from
+  the session and never trusts an id from the form.
+
+### Security decisions
+
+- `safeRedirectPath()` rejects anything that is not a same-site absolute path,
+  so `?next=//evil.example.com` cannot bounce a user off-site. Verified.
+- `authErrorMessage()` maps Supabase error codes to friendly copy and logs the
+  original server-side; raw provider errors never reach the browser.
+- Server Actions treat every input as untrusted: parse with Zod, then re-derive
+  identity from the session.
+- Passwords are never echoed back into a re-rendered form.
+
+### UI
+
+- `(auth)` route group with a centred card layout; `(dashboard)` group with a
+  header showing the user's name, a link to settings and sign out.
+- `FormField` primitive wires label, `aria-invalid`, `aria-describedby`, hint
+  text and a `role="alert"` error message together.
+- Forms use `useActionState` for pending state and inline field errors, plus a
+  toast for the overall result. Toasts use a stable id so repeated failures
+  replace rather than stack.
+- Landing page now links to sign up and sign in.
+
+### Checks run
+
+| Check               | Result                                                        |
+| ------------------- | ------------------------------------------------------------- |
+| `npm run lint`      | ✅ Clean                                                       |
+| `npm run typecheck` | ✅ Clean                                                       |
+| `npm run build`     | ✅ 7 routes; auth pages dynamic, landing static                |
+| `/` unauthenticated | ✅ 200                                                         |
+| `/dashboard`, `/settings` unauthenticated | ✅ 307 → `/sign-in?next=…`              |
+| `/groups` (not built yet) | ✅ 307 → `/sign-in?next=/groups` — private by default    |
+| `/sign-in`, `/sign-up` | ✅ 200, forms render server-side with labels wired to inputs |
+| Garbage session cookie | ✅ Treated as signed out, no crash                          |
+| `?next=//evil.example.com` | ✅ Rejected, falls back to `/dashboard`                 |
+| `/auth/confirm` with a bad token | ✅ 307 → `/sign-in?error=invalid_link`            |
+| Unconfigured environment | ✅ Fails loudly naming the missing keys, without printing values |
+
+### Not verified yet
+
+There is no Supabase project connected — `.env.local` still holds empty
+placeholders — so the following could not be exercised end to end and need a
+run-through once credentials are in place:
+
+1. Applying `0001_profiles.sql` to a real database.
+2. A real sign up creating the profile row via the trigger.
+3. Sign in, session persistence across a browser restart, and sign out.
+4. The email confirmation link round trip.
+5. Renaming a profile through RLS.
+
+Local PostgreSQL is installed but requires credentials and has no `auth` schema,
+so the migration could not be rehearsed against it.
+
+### Deliberately not done in this phase
+
+No groups, expenses, categories, budgets or invitations, and no email provider
+integration — Phase 3 onwards. Password reset and OAuth providers are not built
+either; the architecture leaves room for both (`/auth/confirm` already handles
+recovery links, and the DAL does not assume a password login).

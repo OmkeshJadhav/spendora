@@ -1,21 +1,10 @@
 import { Wallet } from "lucide-react";
+import Link from "next/link";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { buttonVariants } from "@/components/ui/button";
 import { FadeIn } from "@/components/ui/fade-in";
 import { APP_DESCRIPTION, APP_NAME } from "@/lib/constants";
 
-/**
- * Placeholder landing page. It is replaced by the real marketing/auth entry
- * point once authentication exists.
- */
 export default function Home() {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center gap-8 px-6 py-16">
@@ -32,21 +21,16 @@ export default function Home() {
         </p>
       </FadeIn>
 
-      <FadeIn delay={0.08}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Setup status</CardTitle>
-            <CardDescription>
-              The project foundation is in place. Accounts, expenses and groups
-              arrive in the next phases.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-3">
-            <Badge variant="success">Foundation ready</Badge>
-            <Badge>Authentication pending</Badge>
-            <Button disabled>Sign in</Button>
-          </CardContent>
-        </Card>
+      <FadeIn delay={0.08} className="flex flex-col gap-3 sm:flex-row">
+        <Link href="/sign-up" className={buttonVariants({ size: "lg" })}>
+          Create an account
+        </Link>
+        <Link
+          href="/sign-in"
+          className={buttonVariants({ variant: "secondary", size: "lg" })}
+        >
+          Sign in
+        </Link>
       </FadeIn>
     </main>
   );

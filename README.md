@@ -4,8 +4,9 @@ A monthly expense tracker for personal and shared spending. Record expenses,
 organise them into groups with per-category monthly budgets, and see where the
 money went — month by month.
 
-> **Status:** in development. Phase 1 (project foundation) is complete;
-> authentication, data and dashboards land in later phases. See
+> **Status:** in development. Phases 1-2 (project foundation, Supabase
+> authentication and profiles) are complete; expenses, groups, budgets and
+> dashboards land in later phases. See
 > [`project-progress.md`](./project-progress.md) for what exists today and
 > [`master-specifications.md`](./master-specifications.md) for the full plan.
 
@@ -21,7 +22,7 @@ money went — month by month.
 | Animation     | Motion                                               |
 | Notifications | Sonner (toasts)                                      |
 | Validation    | Zod                                                  |
-| Database/auth | Supabase (PostgreSQL, Auth, Row Level Security) — planned |
+| Database/auth | Supabase (PostgreSQL, Auth, Row Level Security)     |
 | Email         | Resend — planned                                     |
 | Linting       | ESLint (flat config, `eslint-config-next`)           |
 
@@ -60,9 +61,21 @@ which key is missing without printing its value.
 
 ## Supabase setup
 
-Not yet wired up. From Phase 2 the steps will be: create a Supabase project,
-copy the URL and anon key into `.env.local`, run the SQL migrations, enable
-email/password authentication, and apply the Row Level Security policies.
+1. Create a project at [supabase.com](https://supabase.com).
+2. Copy **Project URL** and the **anon** key from Project Settings → API into
+   `.env.local`.
+3. Apply the migrations in `supabase/migrations/` — the SQL Editor, `psql`, or
+   the Supabase CLI all work. See [`supabase/README.md`](./supabase/README.md)
+   for the commands and for what each migration contains.
+4. Under Authentication → Providers, enable **Email**. Both settings of
+   "Confirm email" are handled by the app.
+5. Under Authentication → URL Configuration, set the Site URL to your app origin
+   (`http://localhost:3000` in development) so confirmation links come back to
+   the app.
+
+Everything the browser touches goes through the anon key, so **Row Level
+Security is the security boundary** — the anon key alone grants no access to
+another user's rows.
 
 ## Email setup
 
@@ -103,11 +116,40 @@ and authorization suite arrives in Phase 12.
 
 ```text
 src/
-├── app/            # App Router routes, layout, error/loading/not-found UI
+├── app/
+│   ├── (auth)/         # Sign in, sign up — public
+│   ├── (dashboard)/    # Dashboard, settings — requires a session
+│   ├── auth/confirm/   # Verifies emailed one-time links
+│   └── ...             # Root layout, error/loading/not-found UI
 ├── components/
-│   └── ui/         # Reusable presentational primitives
-├── lib/            # Framework-agnostic helpers (utils, env, constants)
-└── types/          # Shared value types
+│   └── ui/             # Reusable presentational primitives
+├── lib/
+│   ├── auth/           # Data access layer, server actions, error mapping
+│   ├── supabase/       # Request-scoped Supabase clients
+│   └── validations/    # Zod schemas shared by client and server
+├── types/              # Shared value types and the database schema type
+└── proxy.ts            # Session refresh + route protection
+
+supabase/
+└── migrations/         # Numbered, re-runnable SQL
 ```
 
 `@/*` resolves to `src/*`.
+
+## How authentication works
+
+- **Sessions live in cookies.** `@supabase/ssr` writes them, so a session
+  survives a refresh and a browser restart, and ends on sign out.
+- **`src/proxy.ts`** runs before every route: it refreshes expiring tokens
+  (Server Components cannot write cookies, so this is the only place a refresh
+  can be saved) and redirects unauthenticated visitors to `/sign-in?next=…`.
+  Routes are private unless explicitly listed as public.
+- **`src/lib/auth/dal.ts`** is the real gate. `getUser()` calls Supabase's
+  `getUser()`, which revalidates the token with the auth server rather than
+  trusting the cookie, and is memoised per render. Pages call `requireUser()` or
+  `requireProfile()` so a check is never skipped at a call site.
+- **Server Actions re-validate everything.** They are public POST endpoints, so
+  each one parses its input with Zod and derives the user from the session
+  rather than from the submitted form.
+- **RLS is the last line.** Even with a valid session, the database only returns
+  rows the policies allow.
