@@ -1,10 +1,9 @@
 /**
  * Shared value types.
  *
- * These are the fixed vocabularies the application is built on (currencies,
- * payment modes, roles). Entity types for profiles, groups, expenses and so on
- * are derived from the database schema in a later phase, so they are not
- * hand-written here.
+ * This module holds the fixed vocabularies the application is built on
+ * (currencies, payment modes, roles) and re-exports the entity types, which are
+ * derived from the database schema rather than written twice.
  */
 
 import type { GROUP_ROLES, PAYMENT_MODES } from "@/lib/constants";
@@ -32,3 +31,19 @@ export type MonthKey = {
   /** 1-12, not zero-based. */
   month: number;
 };
+
+/**
+ * Entity types, re-exported so application code has one import surface.
+ * Their single source of truth is `src/types/database.ts`, which mirrors
+ * `supabase/migrations/`.
+ */
+export type {
+  Budget,
+  Category,
+  Expense,
+  Group,
+  GroupInvitation,
+  GroupMember,
+  InvitationStatus,
+  Profile,
+} from "./database";

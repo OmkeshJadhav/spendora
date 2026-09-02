@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "db:verify-rls": "node scripts/verify-rls.mjs",
+    "db:confirm-users": "node scripts/confirm-users.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

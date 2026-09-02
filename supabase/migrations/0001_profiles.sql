@@ -121,6 +121,21 @@ create or replace trigger on_auth_user_email_changed
   when (new.email is distinct from old.email)
   execute function public.handle_user_email_change();
 
+-- Anyone who signed up before this migration existed has no profile, and the
+-- application would treat them as broken. Backfill them on the same terms the
+-- trigger uses. Runs on every apply and is a no-op once everyone has one.
+insert into public.profiles (id, name, email)
+select
+  u.id,
+  coalesce(
+    nullif(btrim(u.raw_user_meta_data ->> 'name'), ''),
+    split_part(u.email, '@', 1)
+  ),
+  u.email
+from auth.users u
+where u.email is not null
+on conflict (id) do nothing;
+
 -- ---------------------------------------------------------------------------
 -- Row Level Security
 -- ---------------------------------------------------------------------------
