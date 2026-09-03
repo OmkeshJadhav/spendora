@@ -10,6 +10,7 @@
     "lint:fix": "eslint --fix",
     "typecheck": "next typegen && tsc --noEmit",
     "db:verify-rls": "node scripts/verify-rls.mjs",
+    "verify:expenses": "node scripts/verify-expenses.mjs",
     "db:confirm-users": "node scripts/confirm-users.mjs"
   },
   "dependencies": {

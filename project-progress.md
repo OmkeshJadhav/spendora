@@ -8,7 +8,7 @@ Tracks what has actually been built, phase by phase, against
 | 1     | Project foundation             | ✅ Complete    |
 | 2     | Supabase + Authentication      | ✅ Complete    |
 | 3     | Database schema + RLS          | ✅ Complete    |
-| 4     | Personal expense tracking      | ⬜ Not started |
+| 4     | Personal expense tracking      | ✅ Complete    |
 | 5     | Groups                         | ⬜ Not started |
 | 6     | Group expenses                 | ⬜ Not started |
 | 7     | Categories + budgets           | ⬜ Not started |
@@ -484,6 +484,224 @@ has no privileged endpoint to get wrong.
 migrations via `psql`, the second only lets the test suite create and delete its
 throwaway accounts. The database password contains an `@`, so the URL must be
 parsed rather than handed to `psql` as a URI.
+
+---
+
+## Phase 4 — Personal expense tracking (complete, 3 September 2026)
+
+Add, list, edit and delete personal expenses, with categories, payment modes,
+dates, notes and timestamps, plus a personal dashboard. No groups, no budgets,
+no charts, no filters — those are Phases 5 to 10.
+
+### Phases 1-3 re-verified first
+
+Nothing was changed until the existing work was confirmed to still run:
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 7 routes |
+| `npm run db:verify-rls` | ✅ 77 passed, 0 failed, against the live database |
+| Route protection | ✅ `/dashboard`, `/settings`, `/expenses` → 307 to `/sign-in?next=…`; `/`, `/sign-in`, `/sign-up` → 200 |
+
+The working tree was clean and the migrations were already applied, so Phase 4
+is application code only. No migration was added: the Phase 3 schema already
+carries everything an expense needs.
+
+### Foundations
+
+Two small modules exist because the specification calls out both areas as
+precision-critical, and both are easy to get quietly wrong.
+
+**`src/lib/dates.ts`.** `expense_date` is a PostgreSQL `date` — a calendar day
+with no time and no zone — so every helper works on `YYYY-MM-DD` strings.
+Nothing calls `new Date("2026-09-10")`, which is midnight UTC and therefore
+still 9 September in the Americas; `parseIsoDate` builds local midnight
+instead. `isIsoDate` rejects 31 February, which `Date` would silently roll
+forward. Display is `en-GB`, which renders exactly the specification's
+"10 Sept 2026". `elapsedDaysInMonth` is what average daily spending divides by,
+so a figure part-way through a month is not diluted by days that have not
+happened yet.
+
+**`src/lib/money.ts`.** Amounts are `numeric(14,2)` and arrive from PostgREST
+as JSON numbers, which is exact at that scale — but adding doubles repeatedly
+is not. Every total is accumulated in integer minor units and converted back
+only to format. There is a test for exactly this: ₹0.10 + ₹0.20 + ₹0.30 +
+₹70.07 renders as ₹70.67, not ₹70.67000000000002.
+
+### Data access and mutations
+
+`src/lib/expenses/queries.ts` holds the reads, `actions.ts` the writes.
+
+Every query filters on `user_id` **and** `group_id is null`, even though RLS
+already restricts the rows. The filters are not the security boundary; they
+state the intent at the call site and let PostgreSQL use the partial index
+built for this path. The `group_id is null` half matters on the edit page in
+particular: without it, a group expense the user can legitimately read would
+open in the personal editor.
+
+Categories are fetched in a separate query and joined in memory rather than
+embedded in the expense select. `expenses` has two foreign keys to
+`categories` — one for group rows, one for personal — which makes a PostgREST
+embed ambiguous, and disambiguating a composite relationship by constraint name
+is more fragile than one small extra query.
+
+Each Server Action re-validates its input with Zod and re-derives the user from
+the session. Nothing identifying comes from the form: `user_id` and `paid_by`
+are always the session's user, and updates and deletes are matched on that user
+before they can touch a row. Database errors are mapped to copy a user can act
+on (`23514` → "check the amount", `23503` → "that category is no longer
+available") and the original is logged server-side.
+
+### Categories without a setup step
+
+Phase 3 deliberately seeded no default categories, because specification §13
+says defaults are offered rather than forced. The expense form resolves that:
+the category select lists the user's own categories, then the fourteen suggested
+defaults they have not created yet, then "+ Create a new category".
+
+Picking a suggestion or typing a name is a find-or-create. Names are matched the
+way the database's unique index compares them — `lower(btrim(name))` — so
+"gROCERIES  " reuses "Groceries" instead of colliding. A lost race on the unique
+index (`23505`) re-reads and uses the winner's row. An existing category id that
+is not the user's own is treated as a tampered form and refused, not as a typo.
+
+### The form
+
+Field order follows the specification's quick-entry flow: item name, amount,
+paid by, date, category, payment mode, notes. Every control is native — `select`,
+`input type="date"`, `textarea` — which is keyboard-accessible and
+screen-reader-correct without any code of ours, and opens the platform's own
+pickers on mobile. Radix is still not installed, because nothing yet needs a
+control the platform does not provide.
+
+Three details worth recording:
+
+- **"Paid by" is read-only.** A personal expense is always paid by its owner, and
+  the database enforces it (`expenses_personal_paid_by_owner`). Rendering a
+  disabled-looking picker that can only hold one value would be a lie, so it
+  shows the user's name and says that a group lets you choose.
+- **The date default is corrected in the browser.** The server's "today" is its
+  own calendar day, which for an IST user between midnight and 05:30 is
+  yesterday in UTC. The field is uncontrolled and an effect corrects it once the
+  browser can answer — only for a new expense, and only while it still holds the
+  server's guess, so a typed date is never overwritten.
+- **Toasts survive the redirect.** A Server Action that redirects cannot also
+  return a message to `useActionState`, because the component it would render
+  into is gone. Actions append `?flash=…` and the destination toasts it once and
+  strips it from the URL, so a refresh does not repeat it.
+
+Delete is behind an inline confirmation rather than a modal. The first button is
+a real submit button, so without JavaScript it posts straight to the action;
+with JavaScript it becomes a confirmation step instead.
+
+### UI
+
+- `Field` + `fieldAria` extract the label/hint/error wiring every control
+  shares; `FormField` now builds on them, so the accessibility markup exists
+  once rather than per control type. New primitives: `Select`, `Textarea`,
+  `EmptyState`.
+- Expense rows are cards, not table cells — an expense has seven fields, and a
+  seven-column table is unreadable on a phone. Days are grouped under a heading
+  carrying that day's total.
+- Dashboard: month stated up front, three stat cards (total, count, average
+  daily), a category breakdown, and recent expenses. The breakdown's bar is a
+  proportion and every row states its share in words, so nothing depends on
+  seeing colour.
+- Navigation now has Dashboard and Expenses with an active state, on one row
+  that works at every width. A floating action button adds an expense on mobile.
+- Empty states for "no expenses yet" and "no expenses recorded for
+  <month>"; skeleton loading states for both new pages.
+- Pagination at 20 per page, with a junk `?page=` value falling back to page 1.
+
+### Testing — `scripts/verify-expenses.mjs`, `npm run verify:expenses`
+
+41 assertions, all made against the running application over HTTP with a real
+Supabase session cookie. Expenses are created, edited and deleted by submitting
+the **actual forms**, hidden Server Action fields and all — the no-JavaScript
+path — so the suite exercises the Server Actions themselves rather than a
+re-implementation of them. The cookie jar is filled by `@supabase/ssr`, so the
+cookies are byte-for-byte what a browser would hold.
+
+It covers empty states, the full create/read/update/delete cycle, every
+validation rule, category find-or-create and its case-insensitive matching,
+privacy between two users, the signed-out redirect, exact money arithmetic,
+calendar-date fidelity, and pagination. Throwaway accounts are deleted at the
+end even when assertions fail; the database was confirmed empty afterwards.
+
+**All 41 pass.** Three of the first-run failures were the test's fault, not the
+application's, and are worth recording because they will recur:
+
+1. **React writes `<!-- -->` between adjacent text nodes**, so "Welcome, {name}"
+   arrives as `Welcome, <!-- -->Ada Owner`. Assertions on rendered copy strip
+   those first.
+2. **The suite ran across midnight**, so an expense dated "today" was headed
+   "Yesterday". Day grouping is now asserted on the heading's `id`, which
+   carries the ISO date, rather than on its label.
+3. **`notFound()` does not produce a 404 status here** — see below.
+
+### A finding: `notFound()` returns 200
+
+Requesting a missing expense, or another user's, renders the not-found UI and
+leaks nothing — the expense form is absent, the response carries
+`NEXT_HTTP_ERROR_FALLBACK;404` and `<meta name="robots" content="noindex">`.
+But the HTTP status is **200, not 404**.
+
+This is Next 16.3.4 behaviour, not something this phase introduced: a page whose
+body is only `notFound()` behaves the same way, in development and in a
+production build alike. Next streams the document shell and its metadata before
+the page finishes rendering, so the 200 status line is already committed by the
+time the 404 is thrown. Removing the `loading.tsx` Suspense boundaries above the
+route does not change it.
+
+Nothing is being worked around. `notFound()` is the correct API, it renders the
+correct UI, and it does not expose the record. The status code is noted here so
+it is not rediscovered later, and is worth revisiting in Phase 12 against a
+newer Next release.
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 10 routes; `/expenses`, `/expenses/new`, `/expenses/[id]/edit` added |
+| `npm run verify:expenses` | ✅ 41 passed, 0 failed |
+| `npm run db:verify-rls` | ✅ 77 passed, 0 failed — Phase 3 unaffected |
+| Dev server log | ✅ No errors or warnings during the whole suite |
+| Database left clean | ✅ 0 expenses, 0 categories, only the 2 real accounts |
+
+Two lint errors were fixed rather than suppressed: `react-hooks/set-state-in-effect`
+fired twice, and both call sites were genuinely better without the state update
+— the date field became uncontrolled, and a failed delete now leaves its
+confirmation open instead of resetting it.
+
+### Decisions worth knowing
+
+- **No migration in this phase.** The Phase 3 schema already had everything;
+  adding one would have meant re-verifying 77 authorization assertions for no
+  gain.
+- **Totals are summed in TypeScript, in integer minor units, not in SQL.** One
+  user-month is a small bounded set and PostgREST does not expose aggregates by
+  default. Group dashboards aggregate across members and will need a
+  database-side summary instead — noted in the code.
+- **Native form controls over a component library.** Fewer dependencies, better
+  mobile behaviour, and accessibility that does not have to be re-implemented.
+- **Personal expenses are INR.** `DEFAULT_CURRENCY_CODE` in one place, the
+  schema's own default, and the currency is already a column — per-user currency
+  is a settings change later, not a migration.
+
+### Deliberately not done in this phase
+
+Month selector, search and filters (Phase 9); charts (Phase 8); budgets and a
+category management screen (Phase 7); groups, invitations and email (Phase 5);
+CSV export (Phase 10). Personal categories can be created while adding an
+expense but not yet renamed or archived from the UI — the schema and the
+actions already support both.
+
+The email-confirmation deviation recorded below is still active and still must
+be reverted in Phase 5.
 
 ---
 

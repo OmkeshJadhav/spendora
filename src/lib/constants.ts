@@ -1,4 +1,4 @@
-import type { Currency, CurrencyCode } from "@/types";
+import type { Currency, CurrencyCode, PaymentMode } from "@/types";
 
 /** Currencies a group can be created in. Stored as the ISO code, never a symbol. */
 export const CURRENCIES = [
@@ -38,6 +38,15 @@ export const DEFAULT_CATEGORIES = [
   "Personal Care",
   "Other",
 ] as const;
+
+/** Display label for a stored payment mode, or null when none was recorded. */
+export function paymentModeLabel(mode: PaymentMode | null): string | null {
+  if (!mode) {
+    return null;
+  }
+
+  return PAYMENT_MODES.find((entry) => entry.value === mode)?.label ?? null;
+}
 
 export const GROUP_ROLES = ["admin", "member"] as const;
 
