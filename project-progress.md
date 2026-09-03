@@ -11,7 +11,7 @@ Tracks what has actually been built, phase by phase, against
 | 4     | Personal expense tracking      | ✅ Complete    |
 | 5     | Groups + in-app invitations    | ✅ Complete    |
 | 6     | Group expenses                 | ✅ Complete    |
-| 7     | Categories + budgets           | ⬜ Not started |
+| 7     | Categories + budgets           | ✅ Complete    |
 | 8     | Dashboards                     | ⬜ Not started |
 | 9     | Search, filters + history      | ⬜ Not started |
 | 10    | Export                         | ⬜ Not started |
@@ -1289,6 +1289,274 @@ date ranges (Phase 9); CSV export (Phase 10). A group's categories can be
 created while adding an expense but not yet renamed or archived from the UI —
 the schema and the actions already support both, and the screen for it is
 Phase 7's.
+
+---
+
+## Phase 7 — Categories + budgets (complete, 3 September 2026)
+
+Specification §13-16 and §19: default categories, custom categories, category
+management, monthly budgets, budget vs actual, remaining budget and budget
+utilisation — for a personal area and for a group, under the same rules.
+
+### Phases 1-6 re-verified first
+
+Before writing anything, the existing suites were run against the running
+application, so a regression later in this phase could not be mistaken for a
+pre-existing failure:
+
+| Suite                        | Result           |
+| ---------------------------- | ---------------- |
+| `npm run db:verify-rls`      | 77 passed, 0 failed |
+| `npm run verify:expenses`    | 41 passed, 0 failed |
+| `npm run verify:groups`      | 71 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+
+All four still pass unchanged at the end of the phase.
+
+### No migration was needed
+
+Phase 3 already created `categories` and `budgets` in full — columns, the
+single-owner check constraints, the composite foreign keys, the partial unique
+indexes, the identity-pinning triggers and every RLS policy. Phase 7 is
+therefore entirely an application-layer phase. Nothing in
+`supabase/migrations/` changed.
+
+Two pieces of that schema turned out to carry this phase on their own:
+
+- **`budgets.period_month`.** NULL is the *standing* monthly budget; a date is
+  an override for that month only. Reading a month is
+  `coalesce(month-specific, standing)`. That satisfies "budgets are monthly"
+  today (§15) and "the architecture should support future month-specific
+  budgets" without a schema change — the reader already honours both, and only
+  the standing budget is editable from the UI.
+- **The `categories_detach_expenses` trigger.** Deleting a category leaves its
+  expenses in place and merely uncategorised, so "delete" is a safe verb.
+
+### One owner, one implementation
+
+`categories` and `budgets` are the same tables for personal and group rows,
+distinguished by which owning column is set. Rather than write each query
+twice, `src/lib/categories/owner.ts` makes the owner a value:
+
+```ts
+type CategoryOwner =
+  | { kind: "personal"; userId: string }
+  | { kind: "group"; groupId: string };
+```
+
+`ownerColumn()` selects the column to filter on and `ownerColumns()` the pair
+to insert. Every read and every mutation below takes a `CategoryOwner`, so the
+personal page and the group page run the *same* code — there is no second
+implementation to drift.
+
+A personal owner's `userId` always comes from the session. A group owner's
+`groupId` comes from the route and says only *which* group; whether the caller
+may act on it is RLS's answer, never this type's.
+
+### What was built
+
+**Money and month arithmetic**
+
+- `src/lib/budgets/status.ts` — `budgetProgress()` and `budgetTotals()`: pure,
+  free of any server import, working in integer minor units. Returns state
+  (`none` / `healthy` / `warning` / `exceeded`), remaining, percentage used, a
+  clamped bar width and a label in words. Thresholds are read from the exact
+  amounts rather than the rounded percentage, so 99.6% of a budget is not
+  reported as having reached 100%.
+- `src/lib/dates.ts` — month-in-a-URL helpers: `monthParam`, `parseMonthParam`,
+  `compareMonths`, `shiftMonth`, `maxMonth`, `monthStartIso`, `resolveMonth`.
+  A month out of range, or malformed, falls back to the current month rather
+  than erroring.
+
+**Reads**
+
+- `src/lib/categories/queries.ts` — `listOwnerCategories()` (active first, then
+  archived, alphabetical within each) and `unusedDefaults()`, which matches on
+  `lower(btrim(name))` exactly as the unique index does, so a suggestion the
+  database would reject as a duplicate is never offered.
+- `src/lib/budgets/queries.ts` — `getBudgetOverview(owner, month)`, the single
+  answer to "budget vs actual for this month", in three parallel queries.
+  Resolves the standing/month-specific precedence in one place, and orders rows
+  by *need* — over budget, then nearing it, then healthy, then unbudgeted,
+  archived last — so the categories wanting attention are at the top rather
+  than the ones that happen to start with "A".
+
+**Mutations**
+
+- `src/lib/categories/actions.ts` — create, add several suggested defaults at
+  once, rename, archive, restore, delete.
+- `src/lib/budgets/actions.ts` — set (or replace) and clear.
+- `src/lib/categories/scope.ts` — `resolveOwner()` and one shared
+  `writeFailureMessage()`, so an RLS refusal reads the same wherever it lands.
+- `src/lib/validations/category.ts` and `src/lib/validations/budget.ts` —
+  bounds mirroring the database's own constraints exactly, so a value that
+  passes in the browser cannot be rejected by Postgres for a reason the user
+  was never shown.
+
+**UI**
+
+- `src/components/month-nav.tsx` — `‹ September 2026 ›` (§58), as plain links.
+  The month lives in the URL, so the view is shareable, the back button steps
+  through months, and no client state is involved.
+- `src/components/budgets/budget-meter.tsx` — the bar, the status badge and the
+  figures. Colour is never the only signal (§16, §40): every meter states its
+  status in words, spells out the figures beside it, and carries an
+  `aria-valuetext` that reads as a sentence.
+- `src/components/categories/` — `category-budgets.tsx` (the shared page body),
+  `category-row.tsx`, `add-category-form.tsx`, `suggested-categories.tsx`.
+- Pages: `/categories` and `/groups/[id]/categories`, each with a skeleton
+  `loading.tsx`. "Categories" joined the main navigation; the group page and
+  the group's other screens link to theirs from `GroupContext`.
+
+### Two verbs for "I don't need this"
+
+Archiving and deleting are genuinely different, and both are offered:
+
+- **Archive** keeps the category, so historical expenses still name it, and
+  stops it being offered for new ones — enforced by the
+  `expenses_check_category_active` trigger, not by the absence of an option.
+- **Delete** removes it. Its expenses survive as uncategorised (the detach
+  trigger), and its budget goes with it through the composite foreign key's
+  cascade.
+
+### Clearing a budget deletes the row
+
+`budgets_amount_positive` refuses zero, so "no budget" cannot be stored as a
+budget of nothing — and it should not be: the first is untracked, the second
+would be permanently over budget. Clearing therefore deletes.
+
+### Setting a budget is read-then-write, not an upsert
+
+The uniqueness behind "one standing budget per category" is a *partial* unique
+index (`budgets_standing_unique_idx ... where period_month is null`).
+PostgREST's `on_conflict` takes column names only — it cannot express the
+predicate — so the inference would fail. `setBudget` reads first and then
+inserts or updates. The race that leaves is a duplicate insert, which the index
+still refuses; that refusal (23505) is caught and retried as an update, so the
+last writer wins rather than the user seeing an error they cannot act on.
+
+### A correction made during the phase: rename had to work without JavaScript
+
+The rename control was first written as a form behind a piece of `useState`,
+with its action redirecting on success. That was wrong in two ways at once:
+
+- The form was not in the rendered HTML, so — unlike the archive, delete and
+  budget controls beside it, which are built on `SubmitAction` and
+  `ConfirmAction` precisely so they post without JavaScript — renaming was
+  reachable only with JavaScript running.
+- Redirecting made it the only control on the page that navigated, for no
+  reason the user would notice.
+
+Both were fixed: `renameCategory` now returns a `FormState` like its siblings,
+and the form sits inside a native `<details>` disclosure. `<details>` is
+keyboard accessible and correctly announced with no code of ours, it collapses
+so a long category list stays readable, and the form is in the document either
+way — so the rename posts when JavaScript never arrives. The unused
+`categoriesUrl()` helper and the `category-renamed` flash key were removed with
+it.
+
+### Testing — `scripts/verify-budgets.mjs`, `npm run verify:budgets`
+
+57 checks, over the same two surfaces the earlier suites use: the running
+application over HTTP (submitting the *actual* forms, hidden Server Action
+fields and all, which is the no-JavaScript path and therefore runs the real
+Server Actions), and PostgREST directly with each user's own JWT, which is
+what somebody reaches when they skip the UI.
+
+| Group | Checks |
+| ----- | ------ |
+| Empty states | 3 |
+| Creating personal categories | 5 |
+| Budget versus actual | 8 |
+| Months | 4 |
+| Changing a budget | 4 |
+| Category lifecycle | 5 |
+| Group categories and budgets | 10 |
+| Authorization, proved against the database | 11 |
+| Database constraints | 5 |
+
+Worth calling out among them:
+
+- 80% of a budget is a warning and 100% an overspend, reported as an amount
+  over rather than as a negative remaining.
+- A standing budget applies to a month with no spending in it; an expense in a
+  past month counts in that month only; a month-specific budget overrides the
+  standing one; a nonsense `?month=` falls back to the current month.
+- More than two decimal places is refused rather than rounded.
+- Personal and group budgets never see each other's spending — in both
+  directions.
+- A member is offered no way to change a group's categories or budgets, *and*
+  the database refuses them when the UI is skipped: create, rename, archive,
+  delete, set, change and clear are each proved against PostgREST.
+- A budget cannot be attached to somebody else's category, a group's budget
+  cannot point at another group's category, and neither a category nor a
+  budget can be re-owned by an update.
+
+Three defects in the suite itself were found and fixed while getting it green,
+each of which would have made it lie rather than fail honestly:
+
+1. `submitForm` did not read the redirect a Server Action answers with (a
+   header, not a document), so group creation yielded no id and nine
+   downstream checks failed against `/groups//categories`. It now uses the
+   same header-then-embedded extraction Phase 5 settled on.
+2. Category names are user text, so one containing `&` reaches the page as
+   `&amp;`. Matching an `aria-label` or a heading against the raw string
+   silently failed to find the control it meant to click; both now escape the
+   name the way React does.
+3. Two assertions searched the whole page for `value="Food"` to prove a
+   suggestion was or was not offered. Every category also renders a rename
+   field carrying its own name, so the page at large was not evidence — both
+   are now scoped to the suggestions form. A third asserted a personal
+   category had not leaked into a group by searching for its name as bare
+   text, which the add-category form's placeholder ("Weekend trips") matched
+   on every page; it now matches the rendered category heading.
+
+### Checks run
+
+| Check | Result |
+| ----- | ------ |
+| `npm run lint` | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | succeeds, 21 routes |
+| `npm run verify:budgets` | 57 passed, 0 failed |
+| `npm run db:verify-rls` | 77 passed, 0 failed |
+| `npm run verify:expenses` | 41 passed, 0 failed |
+| `npm run verify:groups` | 71 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+
+One thing worth knowing for next time: running `npm run typecheck` or
+`npm run build` while `next dev` is running can produce
+`.next/dev/types/routes.d.ts(58,10): error TS1109` — the two race on writing
+the generated route types. It is not a code error. Stop the dev server, or
+`rm -rf .next/dev/types`, and re-run.
+
+### Decisions worth knowing
+
+- **The UI sets the standing budget, not a per-month one.** §15 asks for
+  monthly budgets and for the *architecture* to support month-specific ones.
+  Both are read; only the standing one is written, because a per-month editor
+  is a screen nobody has asked for yet and the reader already handles it. A row
+  whose figure came from an override is labelled "Set for this month".
+- **A month view is a URL, not client state.** `?month=2026-09`. Linkable,
+  bookmarkable, and the back button behaves. This is also the month selector
+  Phase 9 needs, arriving early because budgets are meaningless without one.
+- **Group category management stays admin-only** (§14's simple MVP choice).
+  The pages hide controls they know would be refused; the refusal itself is the
+  database's, in `categories_*` and `budgets_*`.
+- **Archived categories were already filtered out of the expense pickers** in
+  Phases 4 and 6, so archiving needed no change there — only a UI to do it
+  from.
+- **Spending outside any budget is stated rather than hidden.** The page calls
+  out what was spent with no category, and what was spent in categories with
+  no budget, so "Total budget" never quietly implies it covers everything.
+
+### Deliberately not done in this phase
+
+The personal and group dashboards, member spending and charts (Phase 8); free
+text search, the payment-mode and person filters and date ranges (Phase 9);
+CSV export (Phase 10). Per-month budget *editing* is deliberately left out, as
+above. Budgets do not yet appear on either dashboard — that is Phase 8's
+first job, and `getBudgetOverview()` is the function it will call.
 
 ---
 

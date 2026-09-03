@@ -13,7 +13,8 @@
     "verify:expenses": "node scripts/verify-expenses.mjs",
     "db:confirm-users": "node scripts/confirm-users.mjs",
     "verify:groups": "node scripts/verify-groups.mjs",
-    "verify:group-expenses": "node scripts/verify-group-expenses.mjs"
+    "verify:group-expenses": "node scripts/verify-group-expenses.mjs",
+    "verify:budgets": "node scripts/verify-budgets.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

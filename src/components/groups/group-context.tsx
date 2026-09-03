@@ -1,4 +1,4 @@
-import { ArrowLeft, Settings } from "lucide-react";
+import { ArrowLeft, Settings, Tags } from "lucide-react";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ export function GroupContext({
   currencyCode,
   role,
   showSettings = false,
+  showCategories = false,
   backHref = "/groups",
   backLabel = "All groups",
 }: {
@@ -28,6 +29,8 @@ export function GroupContext({
   currencyCode: CurrencyCode;
   role: GroupRole;
   showSettings?: boolean;
+  /** Links to this group's categories and budgets. Members read, admins set. */
+  showCategories?: boolean;
   backHref?: string;
   backLabel?: string;
 }) {
@@ -62,15 +65,27 @@ export function GroupContext({
           ) : null}
         </div>
 
-        {showSettings ? (
-          <Link
-            href={`/groups/${groupId}/settings`}
-            className={buttonVariants({ variant: "secondary", size: "sm" })}
-          >
-            <Settings aria-hidden />
-            Group settings
-          </Link>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {showCategories ? (
+            <Link
+              href={`/groups/${groupId}/categories`}
+              className={buttonVariants({ variant: "secondary", size: "sm" })}
+            >
+              <Tags aria-hidden />
+              Categories &amp; budgets
+            </Link>
+          ) : null}
+
+          {showSettings ? (
+            <Link
+              href={`/groups/${groupId}/settings`}
+              className={buttonVariants({ variant: "secondary", size: "sm" })}
+            >
+              <Settings aria-hidden />
+              Group settings
+            </Link>
+          ) : null}
+        </div>
       </div>
     </div>
   );

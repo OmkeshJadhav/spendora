@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, ReceiptText, Users } from "lucide-react";
+import { LayoutDashboard, ReceiptText, Tags, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
@@ -15,12 +15,13 @@ import { cn } from "@/lib/utils";
  * mobile menu to keep in step.
  */
 const LINKS: {
-  href: "/dashboard" | "/expenses" | "/groups";
+  href: "/dashboard" | "/expenses" | "/categories" | "/groups";
   label: string;
   icon: ComponentType<{ className?: string }>;
 }[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/expenses", label: "Expenses", icon: ReceiptText },
+  { href: "/categories", label: "Categories", icon: Tags },
   { href: "/groups", label: "Groups", icon: Users },
 ];
 

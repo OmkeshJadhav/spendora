@@ -169,3 +169,77 @@ export function formatTimestamp(value: string): string {
     timeStyle: "short",
   }).format(new Date(value));
 }
+
+/**
+ * A month as it travels in a URL: `2026-09`.
+ *
+ * Months move through query strings so a month-scoped page is linkable,
+ * bookmarkable and navigable with plain anchors — no client state, and the
+ * back button does the obvious thing.
+ */
+export function monthParam({ year, month }: MonthKey): string {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+const MONTH_PARAM_PATTERN = /^(\d{4})-(\d{2})$/;
+
+/** Earliest month a budget or a month view may address. */
+export const MIN_MONTH: MonthKey = monthKeyOf(MIN_EXPENSE_DATE);
+
+/** Parses `2026-09`, or null for anything that is not a real month in range. */
+export function parseMonthParam(value: string | undefined): MonthKey | null {
+  if (!value) {
+    return null;
+  }
+
+  const match = MONTH_PARAM_PATTERN.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+
+  if (month < 1 || month > 12) {
+    return null;
+  }
+
+  const key = { year, month };
+
+  // The same window expenses may fall in, so a month can never be shown that
+  // no expense could belong to.
+  if (compareMonths(key, MIN_MONTH) < 0 || compareMonths(key, maxMonth()) > 0) {
+    return null;
+  }
+
+  return key;
+}
+
+/** Negative, zero or positive, like a comparator. */
+export function compareMonths(a: MonthKey, b: MonthKey): number {
+  return a.year !== b.year ? a.year - b.year : a.month - b.month;
+}
+
+/** The month `delta` months away — `-1` is the previous month. */
+export function shiftMonth({ year, month }: MonthKey, delta: number): MonthKey {
+  // Day 1 keeps this away from the 31st-of-a-30-day-month problem.
+  const date = new Date(year, month - 1 + delta, 1);
+
+  return { year: date.getFullYear(), month: date.getMonth() + 1 };
+}
+
+/** The latest month that may be viewed, matching `maxExpenseDate()`. */
+export function maxMonth(today = todayIso()): MonthKey {
+  return monthKeyOf(maxExpenseDate(today));
+}
+
+/** A month as `YYYY-MM-01`, the shape `budgets.period_month` stores. */
+export function monthStartIso(key: MonthKey): IsoDate {
+  return monthRange(key).start;
+}
+
+/** The month a page should show: the one asked for, or the current one. */
+export function resolveMonth(value: string | undefined): MonthKey {
+  return parseMonthParam(value) ?? currentMonthKey();
+}
