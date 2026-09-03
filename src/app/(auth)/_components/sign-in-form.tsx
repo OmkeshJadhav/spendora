@@ -11,6 +11,9 @@ import { idleFormState } from "@/lib/auth/form-state";
 
 export function SignInForm({ next }: { next?: string }) {
   const [state, formAction, pending] = useActionState(signIn, idleFormState);
+  const signUpHref = next
+    ? `/sign-up?next=${encodeURIComponent(next)}`
+    : "/sign-up";
 
   useEffect(() => {
     if (state.status === "error" && state.message) {
@@ -49,7 +52,7 @@ export function SignInForm({ next }: { next?: string }) {
 
       <p className="text-center text-sm text-muted-foreground">
         New here?{" "}
-        <Link href="/sign-up" className="font-medium text-primary hover:underline">
+        <Link href={signUpHref} className="font-medium text-primary hover:underline">
           Create an account
         </Link>
       </p>

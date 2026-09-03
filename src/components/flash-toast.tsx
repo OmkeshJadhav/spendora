@@ -23,7 +23,7 @@ export function FlashToast({ flash, path }: { flash?: string; path: string }) {
       return;
     }
 
-    toast.success(message, { id: "expense-flash" });
+    toast.success(message, { id: "flash" });
     router.replace(path, { scroll: false });
   }, [flash, path, router]);
 

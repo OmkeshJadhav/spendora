@@ -9,7 +9,7 @@ Tracks what has actually been built, phase by phase, against
 | 2     | Supabase + Authentication      | ✅ Complete    |
 | 3     | Database schema + RLS          | ✅ Complete    |
 | 4     | Personal expense tracking      | ✅ Complete    |
-| 5     | Groups                         | ⬜ Not started |
+| 5     | Groups + in-app invitations    | ✅ Complete    |
 | 6     | Group expenses                 | ⬜ Not started |
 | 7     | Categories + budgets           | ⬜ Not started |
 | 8     | Dashboards                     | ⬜ Not started |
@@ -19,9 +19,10 @@ Tracks what has actually been built, phase by phase, against
 | 12    | Testing + security audit       | ⬜ Not started |
 | 13    | Production readiness           | ⬜ Not started |
 
-> ⚠️ **One temporary deviation is active.** Email confirmation is currently
-> bypassed so the application can be used before the email service exists. It
-> **must be reverted in Phase 5**. See
+> ⚠️ **One temporary deviation is still active, and is parked by decision.**
+> Sign-up email confirmation is not enforced end to end, and
+> `scripts/confirm-users.mjs` stays in place. This was reviewed on
+> 3 September 2026 and deliberately left as it is, to be revisited later. See
 > [Temporary: email confirmation bypassed](#temporary-email-confirmation-bypassed).
 
 ---
@@ -705,69 +706,469 @@ be reverted in Phase 5.
 
 ---
 
-## Temporary: email confirmation bypassed
+## Phase 5 — Groups (complete, 3 September 2026)
 
-**Added 2 September 2026. Must be reverted in Phase 5, when the email service is
-integrated.**
+Create a group, choose its currency, see and manage its members, invite people,
+and accept or decline an invitation. No group *expenses* — that is Phase 6, and
+the group page says so where they will go.
+
+> Invitations were first built around an emailed link. They were then reworked
+> so they are answered **inside the application**, with email demoted to a
+> fallback. Both halves are recorded below: the original build first, then
+> [the in-app rework](#in-app-invitations-added-3-september-2026), which is the
+> current behaviour.
+
+### Phases 1-4 re-verified first
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 10 routes |
+| `npm run db:verify-rls` | ✅ 77 passed, against the live database |
+
+The Phase 3 schema already had every table this phase needed, so almost all of
+it is application code. Two small migrations were still required, both for
+things the schema could not express yet — see below.
+
+### What the schema already gave us
+
+Phase 3 deliberately expressed *accepting an invitation* as pure RLS: a user may
+insert their own `group_members` row only when a pending, unexpired invitation
+addressed to their email exists for that group, **and only in the role that
+invitation grants**. Phase 5 did not add a privileged accept endpoint, because
+there was nothing left for one to do. `acceptInvitation` reads the invitation
+with the user's own client (RLS decides whether they may see it) and inserts the
+membership; the database is what accepts or refuses.
+
+The same is true of every permission on the group pages. Nothing in `src/`
+decides who may rename a group or remove a member — RLS does, and the pages only
+avoid offering controls that would be refused.
+
+### Migrations
+
+**`0003_invitation_preview.sql`** — `invitation_preview(token_hash)`.
+
+The RLS policy on `group_invitations` lets only the addressee (or an admin) read
+a row. Correct for the table, but it makes the three cases that matter most on
+an invitation page indistinguishable from a typo: *signed in as the wrong
+person*, *already used or withdrawn*, and *expired* would all have rendered as
+"invalid link".
+
+The function answers them, keyed by the token's hash — so the emailed token, and
+only the emailed token, opens it. It is `stable`, returns **no group id**, and
+returns the invited address **masked** (`r•••@example.com`), so a leaked link
+discloses neither the group's records nor somebody's email.
+
+**`0004_admin_succession.sql`** — replaces `enforce_group_has_admin()`.
+
+Found by this phase's own test suite, which could not delete its accounts:
+Phase 3's "the last admin cannot be removed" guard also fired on the cascade
+`auth.users → profiles → group_members`, so **an account that was the sole admin
+of any surviving group could not be deleted at all**. Postgres reported it as
+"Database error deleting user", with nothing to act on.
+
+The cascade is distinguishable from a person's own action — by the time the
+membership is removed, the `profiles` row it pointed at is already gone. In that
+case the group is handed on rather than defended: the longest-standing remaining
+member becomes admin, or, if nobody remains, the group is deleted.
+
+That second half is not tidiness. `group_is_unclaimed()` opens a member-less
+group to *every* signed-in user — it exists so a creator can read back the group
+they just inserted, in the instant before the trigger makes them its admin. A
+group left with zero members would sit in that state permanently and be
+world-readable. Deleting it closes that off.
+
+Applying migrations in order matters now: 0004 replaces a function 0002 also
+defines, so re-running 0002 alone afterwards would quietly reinstate the older
+version. `supabase/README.md` says so.
+
+### Email (`src/lib/email/`)
+
+Resend, chosen for its free tier and for needing nothing but `fetch` — a whole
+SDK for one POST is the sort of dependency specification §3 asks us not to add.
+The provider sits behind `sendEmail(message)`, so no caller knows which one is
+in use, and swapping in Brevo or Mailjet is one new file plus one line.
+
+`sendEmail` never throws and never returns provider detail: failures are logged
+server-side and described to the user in the caller's own words. The invitation
+template is inline-styled HTML with a plain-text twin, and every value that came
+from a person — a group name, a display name — is escaped.
+
+**When mail cannot be sent, the invitation still exists.** No key configured, or
+the provider refuses the recipient, and the action hands the one-time link back
+to the admin to pass on. That is the only moment it can be shown — only the hash
+is stored, so nothing can reproduce it afterwards — and it is shown *only* on
+that failure, never on the happy path.
+
+`getServerEnv()` became `getEmailEnv()`, which returns null rather than throwing
+when the provider is unconfigured: that is a deployment state the application
+handles, not a programming error that should take a page down. Malformed values
+still throw.
+
+### Invitation tokens
+
+256 bits from a CSPRNG, base64url so nothing needs percent-encoding in an email,
+and only its SHA-256 is stored. At that entropy there is no salt or stretching to
+justify — unlike a password, there is no low-entropy input to protect. Seven-day
+expiry. `token_hash` is pinned by a trigger, so "resend" is deliberately
+*revoke and re-issue* rather than an in-place edit: a link that can be re-read
+from a screen is a link that outlives whoever needed it.
+
+### The pages
+
+- **`/groups`** — cards, each stating the currency, because it is the one piece
+  of group context that changes what every number in it means. Empty state
+  offers "Create group".
+- **`/groups/new`** — name, description, currency. The currency is chosen up
+  front (§10) rather than being an afterthought.
+- **`/groups/[id]`** — group context header (§59: name, currency, your role),
+  members with roles, and, for admins, the invite form and outstanding
+  invitations. A panel where group expenses will go says that they are next,
+  rather than showing a blank space or a button that does nothing.
+- **`/groups/[id]/settings`** — admin only; edit details, delete the group. A
+  member who types the URL gets the same not-found answer as a stranger.
+- **`/invite/[token]`** — the landing page for an emailed link. Private, so the
+  proxy sends an anonymous visitor to `/sign-in?next=/invite/…` and back. Every
+  dead end explains itself: wrong account (with the masked address), already a
+  member, withdrawn, expired, or not a link at all. Marked `noindex`.
+
+Sign-up now honours `?next=`, so following an invitation before you have an
+account carries you back to it afterwards.
+
+### Reuse rather than repetition
+
+`ConfirmAction` extracts the inline-confirmation pattern Phase 4 wrote once for
+deleting an expense: first click is a real submit button (so it works without
+JavaScript), second click confirms. Leave group, delete group, remove member,
+revoke invitation and delete expense are now all the same component.
+
+### A bug worth recording: never bind a Server Action inside a Client Component
+
+`InviteForm` first called `useActionState(inviteMember.bind(null, groupId), …)`.
+Every invite POST then **hung forever** — the action itself finished in under a
+second, and the response never completed. Next's own log showed the action never
+returning, while a plain GET of the same page rendered in two seconds.
+
+It was not the email, not `revalidatePath`, and not the returned value; each was
+ruled out by measurement. Reducing the page to a heading plus that one form
+still hung. The fix is to bind in the Server Component that renders the form —
+`action={inviteMember.bind(null, group.id)}` — which is exactly what
+`ExpenseForm` already did, and why nothing in Phase 4 ever hit it.
+
+`MemberRoleForm` had the same shape and was changed with it. Both now take the
+bound action as a prop, and say why in a comment.
+
+A second, quieter version of the same rule: `ConfirmAction` is a Client
+Component, so it could not take `icon` as a *component* — a function cannot
+cross that boundary. It takes an element instead.
+
+### Testing — `scripts/verify-groups.mjs`, `npm run verify:groups`
+
+58 assertions across two surfaces, because both are real:
+
+1. **The running application over HTTP**, driving the actual forms with their
+   hidden Server Action fields — the no-JavaScript path, so the Server Actions
+   themselves run rather than a re-implementation of them.
+2. **PostgREST directly, with each user's own JWT**, which is what someone
+   reaches when they skip the UI. Every authorization claim is proved there
+   rather than by the absence of a button.
+
+Three throwaway accounts — an admin, a member, an outsider — cover: the empty
+state; creating a group and its validation; the creator becoming admin; a
+non-member seeing nothing at all; inviting, duplicate invitations, self-invites,
+inviting an existing member; the token being stored only as a hash and never
+rendered; the invitation page in every state; a wrong-account link disclosing
+only a masked address; an invitee failing to join as admin against a member
+invitation; acceptance closing the invitation; expired and revoked invitations
+being refused; every admin-only write refused for a member through PostgREST;
+promotion, demotion, the last-admin rule, removal, leaving, deletion and its
+cascade; and unauthenticated access to all of it.
+
+**All 58 pass.** Test accounts are deleted at the end even on failure.
+
+Two of the first-run failures were the suite's own fault and are worth recording:
+
+1. **An invitation cannot be aged by updating `expires_at`** —
+   `expires_at > created_at` is a check constraint, so an expired invitation has
+   to be born that way. The suite writes one with past dates through the service
+   role, which is precisely what no policy allows a user to do.
+2. **The suite cannot assume the invitation link comes back.** It only does when
+   mail is *not* delivered. When it is, the token is gone by design, so the
+   suite re-issues the invitation with a token it chose — the acceptance path is
+   still exercised end to end, without the result depending on mail
+   configuration.
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 15 routes; `/groups`, `/groups/new`, `/groups/[id]`, `/groups/[id]/settings`, `/invite/[token]` added |
+| `npm run verify:groups` | ✅ 58 passed, 0 failed |
+| `npm run verify:expenses` | ✅ 41 passed, 0 failed — Phase 4 unaffected |
+| `npm run db:verify-rls` | ✅ 77 passed, 0 failed — Phase 3 unaffected |
+| Migrations re-applied in order | ✅ All four re-run cleanly |
+| Database left clean | ✅ 0 groups, 0 memberships, 0 invitations, only the 2 real accounts |
+
+### Decisions worth knowing
+
+- **An admin can invite someone as an admin.** The schema already carried a role
+  on the invitation, and the accept policy already insisted the two agree. The
+  form offers it rather than pretending the column does not exist.
+- **Invitations are listed as pending only.** Accepted and revoked ones are
+  noise on a group page. An expired-but-pending one is shown with an "Expired"
+  badge, and re-inviting retires it so the "one pending per email" index frees
+  up.
+- **Expiry is computed on read, never swept.** The insert policy already refuses
+  an expired invitation, so a status column would only ever be catching up with
+  what the clock had already decided.
+- **A group's currency stays editable until its first expense**, then the
+  database refuses (`on update restrict` from `expenses`). The settings form
+  disables the control and says why, and the action maps the refusal to a
+  sentence rather than a Postgres error.
+- **Group reads are three small queries, not a nested select.** `expenses` has
+  two foreign keys to `categories`, which is why Phase 4 stopped embedding; the
+  group queries follow the same habit, so the shapes stay obvious and no
+  relationship has to be disambiguated by constraint name.
+- **`APP_ORIGIN` is new and optional.** Without it the request's own origin is
+  used, which is right in development. With it, a spoofed `Host` header cannot
+  rewrite the link inside an invitation email.
+
+### Deliberately not done in this phase
+
+Group expenses, paid-by selection and group categories (Phase 6); group budgets
+and category management (Phase 7); the group dashboard, member spending and
+charts (Phase 8); month selection and filters (Phase 9); export (Phase 10).
+There is no "resend invitation" button — revoking and inviting again is the same
+thing and one fewer path to get wrong.
+
+---
+
+## In-app invitations (added 3 September 2026)
+
+Extends Phase 5. Invitations now arrive in the application, and email is a
+fallback for the one case the application cannot serve.
 
 ### Why
 
-No email provider is wired up yet, so Supabase's confirmation links are sent
-into the void. `signInWithPassword` refuses any unconfirmed account with
-`email_not_confirmed`, which made every feature built so far impossible to
-exercise by hand. Development needed to continue; this is the smallest change
-that allows it.
+An emailed link is a detour for anyone who already has an account, and it makes
+a core flow depend on deliverability. It bit us immediately: the Resend key is
+on the sandbox sender, which refuses every recipient except the account owner,
+so no invitation in the test suite was ever actually delivered.
 
-### What was actually changed
+Invitations were already addressed by email, and
+`group_invitations_select_admin_or_invitee` already let a signed-in user read
+the ones addressed to them. The in-app path was therefore mostly already
+authorized — it just had nowhere to appear.
 
-**No application code.** Nothing in `src/` gates on email verification, and
-nothing there was weakened — `src/lib/auth/actions.ts` still calls
-`supabase.auth.signUp` and `signInWithPassword` exactly as before, and
-`/auth/confirm` still verifies real one-time tokens. Verification is enforced by
-the Supabase project itself (GoTrue's `mailer_autoconfirm`), not by us.
+### What email is still for
 
-**`scripts/confirm-users.mjs`** (`npm run db:confirm-users`) marks unconfirmed
-accounts as confirmed through the Supabase admin API. It ran once, confirming
-`omkesh.jadhav@gmail.com` — which is now able to sign in. Nothing in `src/`
-imports it; it reads `SUPABASE_SERVICE_ROLE_KEY`, which never reaches the
-browser.
+Somebody who has **no account yet** has no in-app inbox for an invitation to
+appear in. The emailed link, `/invite/[token]`, and `invitation_preview()` all
+stay for exactly that case: follow the link, sign up (`?next=` carries you
+back), accept. Nothing about that flow changed.
 
-**Still outstanding:** the project's own `Confirm email` setting is still on
-(`mailer_autoconfirm: false`). Changing it needs the Supabase dashboard —
-Authentication → Sign In / Providers → Email — or a Management API token, so it
-could not be done from here. Until someone turns it off, **each new sign up
-lands on the "check your inbox" screen and needs `npm run db:confirm-users`
-before it can sign in.** Existing accounts are unaffected.
+So: in-app is the mechanism, email is the reach. If email is unconfigured or
+the provider refuses, the invitation still exists and is still waiting in the
+app — the admin is simply offered the one-time link to pass on by hand.
 
-The sign-up form already handles both configurations — it shows a "check your
-inbox" screen when Supabase returns no session and signs the user straight in
-when it does — so no branch had to be added, and none has to be removed later.
+### Migration — `0005_in_app_invitations.sql`
+
+Three things the schema could not yet express.
+
+**`declined` joins the status vocabulary.** Previously an invitee could ignore
+an invitation but never answer it. A declined invitation is no longer pending,
+so it releases the "one pending invitation per email per group" index and the
+admin can invite that person again.
+
+**One narrow policy lets them decline.** `group_invitations_decline_invitee`
+permits exactly one transition — `pending → declined`, on a row whose email is
+the caller's own. Every other status change is still admin-only.
+
+**The pinning trigger now pins `role` and `expires_at` too**, for anyone who is
+not an admin of the group. This is the part that matters: RLS `WITH CHECK`
+cannot see the old row, so a policy alone cannot say "and don't change the
+role". Without the trigger an invitee could have declined *and* promoted their
+own invitation to admin in the same statement, leaving a row that a later
+re-read would honour. There is a test that does precisely this through
+PostgREST.
+
+**`my_pending_invitations()`** is the inbox. The invitee can read their own
+invitation row but not the group it points at — `groups` requires membership,
+which is the rule that stops an invitation leaking a group's contents. The
+function returns only what is needed to decide: group name, currency, inviter,
+role, expiry. Like `invitation_preview()`, it returns **no group id**;
+accepting re-reads the invitation row itself, under RLS.
+
+### Accepting is one code path
+
+`joinAgainstInvitation()` does the work; `acceptInvitation` (by invitation id,
+from the inbox) and `acceptInvitationByToken` (from a link) differ only in how
+they find the row. That is deliberate — the two entry points must not be able
+to drift apart on what they allow.
+
+Neither checks a token for authorization, because neither needs to:
+`group_members_insert_admin_or_invitee` allows the insert only when a pending,
+unexpired invitation addressed to *this user's own email* exists for that group,
+and only in the role it grants. An invitation id from the client is safe for the
+same reason an id is always safe here — RLS only lets a user find one addressed
+to them.
+
+### UI
+
+- **`/invitations`** — the inbox. Group, currency, inviter, role, expiry, and
+  `[ Accept ] [ Decline ]`. Decline is behind a confirmation, because from the
+  invitee's side it cannot be undone; only the admin can invite again.
+- **Notification bell in the top bar** — a count of waiting invitations, linking
+  to the page. It renders from the *same* query the page uses, memoised per
+  render by React `cache()`, so the badge and the list cannot disagree and the
+  layout does not pay for a second lookup. This is specification §34's
+  "Notifications" slot, finally holding something.
+- **The group page** now lists declined invitations alongside pending ones, with
+  a "Declined" badge and a "Remove" control. An admin who cannot see that
+  somebody said no would re-invite them blindly.
+- **`SubmitAction`** — the non-destructive twin of `ConfirmAction`: same shape,
+  one click, still a real form so it works without JavaScript.
+
+### Testing
+
+`npm run verify:groups` grew from 58 to **71 assertions**, all passing. The new
+ones cover: an invitation appearing in the right person's inbox and nobody
+else's; the notification count; the inbox never rendering a token or a link;
+declining and what it does and does not do; a declined invitation being
+unusable; the admin seeing it as declined; accepting from the app; the inbox and
+badge emptying afterwards; and two attacks made directly through PostgREST —
+an invitee trying to change `role` and `expires_at` while declining, and an
+invitee trying to set `revoked`, `expired` or `accepted` on their own
+invitation. All are refused by the database.
+
+One first-run failure was the suite's own: the invite success copy changed, and
+twelve later assertions cascaded off one stale string match.
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 16 routes; `/invitations` added |
+| `npm run verify:groups` | ✅ 71 passed, 0 failed |
+| `npm run verify:expenses` | ✅ 41 passed, 0 failed |
+| `npm run db:verify-rls` | ✅ 77 passed, 0 failed |
+| `0005` applied | ✅ Applied and re-runnable |
+
+### Specification updated
+
+`master-specifications.md` was amended to match, rather than left describing
+something the application no longer does: §2 (in-app notifications), §11
+(rewritten around the in-app flow, with the email flow kept as the fallback for
+users without an account), §12 (email is explicitly optional), §26 (an empty
+state for invitations), §35 (invitations live in the top bar, not the main
+nav), §49 and §55 (accept *and* decline, plus the two authorization rules),
+Phase 5's own checklist, and §63's definition of done, which no longer requires
+sending an email to consider the project finished.
+
+### Decisions worth knowing
+
+- **Email was not removed.** It is the only way to reach somebody who has not
+  signed up, and the fallback already degrades cleanly. Say the word and it can
+  go, but then an invitation to a stranger has no way to travel.
+- **No notifications table.** There is one kind of notification and it already
+  has a durable row of its own. A general notification system for a single
+  event type would be the premature complexity §3 warns about.
+- **The bell links; it does not open a popover.** One notification type, one
+  page. A popover would be a second place to keep the same list correct.
+- **Declined is recorded, not deleted.** An admin needs to know the answer was
+  no, and the "one pending per email" index frees up either way.
+
+---
+
+## Temporary: email confirmation bypassed
+
+**Added 2 September 2026. Reviewed 3 September 2026 and deliberately parked.**
+
+> **Decision (3 September 2026):** leave this exactly as it is for now, and
+> revisit it later. Nothing below is scheduled against a phase any more. The
+> revert checklist at the end stays accurate and is what to follow when the
+> time comes.
+>
+> Two things make this less urgent than it was when it was written. Invitations
+> are now answered in the application rather than by email, so no *feature*
+> depends on mail delivery. And the risk it carries — see
+> "What this costs" — is a production risk, and this is not deployed. It must
+> still be closed before it is.
+
+### Why it exists
+
+No email provider was wired up, so Supabase's confirmation links went nowhere.
+`signInWithPassword` refuses an unconfirmed account with `email_not_confirmed`,
+which made every feature impossible to exercise by hand.
+
+### What Phase 5 resolved
+
+**The email service exists** (`src/lib/email/`, Resend) and sends group
+invitations. `EMAIL_API_KEY` and `EMAIL_FROM` are configured.
+
+**Still no application code gates on email verification**, and none ever did.
+`src/lib/auth/actions.ts` calls `signUp` and `signInWithPassword` exactly as it
+always has, and `/auth/confirm` still verifies real one-time tokens.
+Verification is enforced by the Supabase project itself.
+
+### What is still outstanding
+
+**Confirmation mail is sent by Supabase, not by us.** `EMAIL_API_KEY` has no
+bearing on it. Supabase's built-in sender is heavily rate-limited and, on
+current projects, only reaches project members — so a new sign-up by anyone
+else still receives nothing.
+
+Checked directly against the project's auth settings on 3 September 2026:
+`mailer_autoconfirm` is `false`, so **confirmation is required and has never
+been switched off**. Each new sign-up therefore lands on the "check your inbox"
+screen and needs `npm run db:confirm-users` before it can sign in. Existing
+accounts are unaffected.
+
+`scripts/confirm-users.mjs` was **kept** rather than deleted. Deleting it while
+confirmation mail cannot actually be delivered would leave no way to onboard an
+account at all, and configuring delivery needs the Supabase dashboard, which is
+not reachable from the codebase. It reads `SUPABASE_SERVICE_ROLE_KEY`, nothing
+in `src/` imports it, and it never reaches the browser.
 
 ### What this costs while it is in place
 
 - Anyone can register with an address they do not own.
 - A typo'd email silently becomes an account nobody can recover.
-- Group invitations are addressed **by email**, and membership is granted to
-  whoever holds a confirmed account at that address. With verification off, an
-  attacker who guesses an invited address could sign up as it and accept the
-  invitation. This is the reason this must not reach production.
+- **Group invitations are addressed by email**, and membership is granted to
+  whoever holds an account at that address — through the in-app inbox now, as
+  well as through a link. With verification not actually enforced end to end,
+  someone who guesses an invited address could register as it and accept the
+  invitation. This is the reason it must not reach production, and it did not
+  get smaller when invitations moved in-app: the in-app inbox is keyed on the
+  account's email exactly as the link was.
 
-The database is unaffected: every RLS policy, constraint and trigger from Phase 3
-still applies, and the 77 authorization assertions still pass.
+The database is unaffected: every RLS policy, constraint and trigger still
+applies, and all 77 authorization assertions still pass.
 
-### How to revert — do this in Phase 5
+### How to finish the revert, when it is picked up again
 
-1. Integrate the email provider (specification §12) so confirmation mail is
-   actually delivered.
-2. Ensure **`Confirm email` is on** in Authentication → Sign In / Providers →
-   Email (it is on today; turn it back on if it was switched off during
-   development).
-3. Set the Site URL and redirect URLs so `/auth/confirm` resolves on the
-   deployed origin, not just `http://localhost:3000`.
-4. **Delete `scripts/confirm-users.mjs`** and its `db:confirm-users` entry in
-   `package.json`.
-5. Verify the round trip by hand: sign up, receive the mail, follow the link,
-   land signed in. Confirm that an unconfirmed account cannot sign in.
+Two Supabase dashboard settings and one manual check. Neither setting is
+reachable from the codebase.
+
+1. **Configure custom SMTP** in Authentication → Emails → SMTP Settings. The
+   Resend credentials already in `.env.local` can be reused; the sending domain
+   has to be verified with Resend either way (today's key is on the sandbox
+   sender, which refuses every recipient but the account owner's own address).
+2. **Set the Site URL and redirect URLs** under Authentication → URL
+   Configuration so `/auth/confirm` and `/invite/<token>` resolve on the
+   deployed origin, not just `http://localhost:3000`. Set `APP_ORIGIN` to the
+   same value so invitation links do not depend on the request's `Host` header.
+3. Leave **Confirm email on** — it already is.
+4. **Verify the round trip by hand**: sign up, receive the mail, follow the
+   link, land signed in; then confirm an unconfirmed account cannot sign in.
+   Also send one group invitation to a real address and follow it through.
+5. **Then delete `scripts/confirm-users.mjs`** and its `db:confirm-users` entry
+   in `package.json`.
 6. Delete this section and the warning at the top of this file.
 
 Until step 6 is done, this deviation is live.

@@ -17,8 +17,19 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
-/** Lifecycle of a group invitation. `expired` is set lazily when one is read. */
-export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+/**
+ * Lifecycle of a group invitation.
+ *
+ * `declined` is the invitee's own answer; `revoked` is the admin's. Expiry is
+ * computed when a row is read rather than swept into `expired`, because the
+ * insert policy already refuses an invitation whose `expires_at` has passed.
+ */
+export type InvitationStatus =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "revoked"
+  | "expired";
 
 export type Database = {
   public: {
@@ -159,7 +170,11 @@ export type Database = {
           created_at?: string;
           updated_at?: string;
         };
-        /** Revoking or expiring. Acceptance is written by a database trigger. */
+        /**
+         * Revoking, declining or expiring. Acceptance is written by a database
+         * trigger. `role` and `expires_at` are pinned for anyone who is not an
+         * admin of the group, so an invitee's only real move is `declined`.
+         */
         Update: {
           role?: GroupRole;
           status?: Exclude<InvitationStatus, "accepted">;
@@ -399,6 +414,42 @@ export type Database = {
       current_user_email: {
         Args: Record<string, never>;
         Returns: string;
+      };
+      /**
+       * What an invitation link may show its holder, keyed by the token hash.
+       * Read-only, and deliberately returns neither the group id nor the
+       * invited address in the clear. See `0003_invitation_preview.sql`.
+       */
+      /**
+       * Open invitations addressed to the signed-in user, with the little of
+       * the group they need to decide. Returns no group id — accepting reads
+       * the invitation row itself, under RLS.
+       */
+      my_pending_invitations: {
+        Args: Record<string, never>;
+        Returns: {
+          invitation_id: string;
+          group_name: string;
+          currency_code: CurrencyCode;
+          inviter_name: string;
+          invited_role: GroupRole;
+          expires_at: string;
+          created_at: string;
+        }[];
+      };
+      invitation_preview: {
+        Args: { p_token_hash: string };
+        Returns: {
+          group_name: string;
+          currency_code: CurrencyCode;
+          inviter_name: string;
+          invitee_email_masked: string;
+          invited_role: GroupRole;
+          invitation_status: InvitationStatus;
+          expires_at: string;
+          is_for_current_user: boolean;
+          is_already_member: boolean;
+        }[];
       };
     };
     Enums: Record<string, never>;

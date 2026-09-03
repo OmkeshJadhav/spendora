@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, ReceiptText } from "lucide-react";
+import { LayoutDashboard, ReceiptText, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
@@ -10,17 +10,18 @@ import { cn } from "@/lib/utils";
 /**
  * Primary navigation (specification section 35).
  *
- * Groups, Reports and the rest join this list as their phases land. With only
- * a couple of destinations a single row works on every screen, so there is no
- * separate mobile menu to keep in step.
+ * Reports and Settings join this list as their phases land. With a handful of
+ * destinations a single row works on every screen, so there is no separate
+ * mobile menu to keep in step.
  */
 const LINKS: {
-  href: "/dashboard" | "/expenses";
+  href: "/dashboard" | "/expenses" | "/groups";
   label: string;
   icon: ComponentType<{ className?: string }>;
 }[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/expenses", label: "Expenses", icon: ReceiptText },
+  { href: "/groups", label: "Groups", icon: Users },
 ];
 
 export function MainNav({ className }: { className?: string }) {

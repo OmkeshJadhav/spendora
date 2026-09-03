@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { z } from "zod";
 
@@ -9,6 +8,7 @@ import { authErrorMessage, unexpectedErrorMessage } from "@/lib/auth/errors";
 import type { FormState } from "@/lib/auth/form-state";
 import { getUser } from "@/lib/auth/dal";
 import { safeRedirectPath } from "@/lib/auth/redirects";
+import { getSiteOrigin } from "@/lib/site";
 import { createClient } from "@/lib/supabase/server";
 import {
   signInSchema,
@@ -32,17 +32,6 @@ function fieldErrorsOf(error: z.ZodError): Record<string, string[]> {
   return fieldErrors;
 }
 
-/** Origin of the current request, used to build email confirmation links. */
-async function getSiteOrigin(): Promise<string> {
-  const headerList = await headers();
-  const host = headerList.get("x-forwarded-host") ?? headerList.get("host");
-  const protocol =
-    headerList.get("x-forwarded-proto") ??
-    (host?.startsWith("localhost") ? "http" : "https");
-
-  return `${protocol}://${host}`;
-}
-
 export async function signUp(
   _prevState: FormState,
   formData: FormData,
@@ -53,6 +42,11 @@ export async function signUp(
     password: String(formData.get("password") ?? ""),
   };
   const echo = { name: raw.name, email: raw.email };
+  // An invitation link sends people here to create an account first; this is
+  // what carries them back to it afterwards.
+  const destination = safeRedirectPath(
+    formData.get("next") ? String(formData.get("next")) : null,
+  );
 
   const parsed = signUpSchema.safeParse(raw);
 
@@ -111,7 +105,7 @@ export async function signUp(
 
   // redirect() throws to unwind, so it must sit outside the try block.
   revalidatePath("/", "layout");
-  redirect("/dashboard");
+  redirect(destination);
 }
 
 export async function signIn(

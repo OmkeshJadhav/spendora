@@ -10,8 +10,11 @@ import { FormField } from "@/components/ui/form-field";
 import { signUp } from "@/lib/auth/actions";
 import { idleFormState } from "@/lib/auth/form-state";
 
-export function SignUpForm() {
+export function SignUpForm({ next }: { next?: string }) {
   const [state, formAction, pending] = useActionState(signUp, idleFormState);
+  const signInHref = next
+    ? `/sign-in?next=${encodeURIComponent(next)}`
+    : "/sign-in";
 
   useEffect(() => {
     if (state.status === "error" && state.message) {
@@ -34,7 +37,7 @@ export function SignUpForm() {
         <p className="text-sm text-muted-foreground">
           Once confirmed, you can{" "}
           <Link
-            href="/sign-in"
+            href={signInHref}
             className="font-medium text-primary hover:underline"
           >
             sign in
@@ -47,6 +50,8 @@ export function SignUpForm() {
 
   return (
     <form action={formAction} className="flex flex-col gap-4" noValidate>
+      {next ? <input type="hidden" name="next" value={next} /> : null}
+
       <FormField
         label="Name"
         name="name"
@@ -85,7 +90,7 @@ export function SignUpForm() {
 
       <p className="text-center text-sm text-muted-foreground">
         Already have an account?{" "}
-        <Link href="/sign-in" className="font-medium text-primary hover:underline">
+        <Link href={signInHref} className="font-medium text-primary hover:underline">
           Sign in
         </Link>
       </p>

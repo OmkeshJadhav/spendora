@@ -81,11 +81,25 @@ Use toast notifications for:
 * Expense deleted
 * Group created
 * Invitation sent
+* Invitation accepted / declined
 * Category created
 * Budget updated
 * Authentication errors
 * Validation errors
 * Export completed
+
+### In-app notifications
+
+Some events need to reach a user who is not on the page where they happened.
+
+Provide a lightweight in-app notification surface in the top bar showing a
+count of items awaiting the user's attention, linking to where they can act.
+
+For the MVP the only such item is a pending group invitation.
+
+Keep the architecture open to further notification types later, but do not
+build a general notification system, a notifications table, or push
+notifications for the MVP.
 
 ## Email
 
@@ -548,9 +562,12 @@ Do not store currency symbols as the canonical database value.
 
 # 11. Group Invitations
 
-The group admin should be able to invite users.
+The group admin should be able to invite users by email address.
 
-Invitation flow:
+Invitations are answered **inside the application**. Email is a fallback, not
+the mechanism.
+
+Primary flow — the invited person already has an account:
 
 ```text
 Admin
@@ -559,18 +576,62 @@ Enter member email
   ↓
 Invitation created
   ↓
-Invitation email sent
+Appears in that user's in-app invitations
+(with a notification count in the top bar)
   ↓
-User opens invitation
+User accepts or declines it in the app
   ↓
-User accepts invitation
+On accept: user becomes group member
+```
+
+Fallback flow — the invited person has no account yet:
+
+```text
+Invitation created
+  ↓
+Invitation email sent, containing a one-time link
+  ↓
+User opens the link, signs up or signs in
+  ↓
+User accepts the invitation
   ↓
 User becomes group member
 ```
 
-Do NOT expose the group to an invited user before the invitation is accepted.
+The two flows must end in the same place, enforced the same way. Accepting
+should not depend on how the invitation was found.
 
-The invitation should contain:
+### In-app invitations
+
+Provide a page listing the invitations addressed to the signed-in user.
+
+Each entry should show:
+
+* Group name
+* Group currency
+* Inviter name
+* Role being offered
+* Expiration information
+
+Provide both:
+
+```text
+[ Accept ]   [ Decline ]
+```
+
+Declining must be recorded, not merely hidden — the group's admin should be
+able to see that the invitation was declined, and should be able to invite
+that person again afterwards.
+
+An accepted or declined invitation must disappear from the user's list, and
+the notification count must agree with it.
+
+### Rules
+
+Do NOT expose the group to an invited user before the invitation is accepted.
+The invitation may show the group's name, currency and inviter — nothing more.
+
+An invitation email should contain:
 
 * Group name
 * Inviter name
@@ -582,8 +643,14 @@ Prevent:
 * Duplicate invitations
 * Duplicate memberships
 * Invalid/expired invitation acceptance
+* Acting on an invitation addressed to somebody else
+* An invitee changing what an invitation grants (its role or its expiry)
 
 Design invitations with an expiration mechanism.
+
+An invitation must only ever grant the role it was issued with, and only to the
+account holding the address it was sent to. Enforce this in the database, not
+only in the application.
 
 ---
 
@@ -617,6 +684,21 @@ lib/email/
 ```
 
 The initial email should be the group invitation email.
+
+### Email is optional
+
+Because invitations are answered in the application (§11), the email service
+must not be a hard dependency.
+
+With no provider configured, or when the provider rejects a message:
+
+* The invitation must still be created.
+* It must still appear in the invitee's in-app invitations.
+* The application must degrade visibly, not silently — offer the admin the
+  one-time link so they can pass it on to someone without an account.
+
+Never let a failed send take down the action that triggered it, and never show
+a raw provider error to a user.
 
 ---
 
@@ -1045,7 +1127,15 @@ Start tracking your spending by adding your first expense.
 You haven't joined any groups yet.
 
 [ Create Group ]
-[ Join Group ]
+```
+
+### No invitations
+
+```text
+No invitations waiting
+
+When someone invites you to a group, it appears here
+for you to accept or decline.
 ```
 
 ### No records for selected month
@@ -1326,6 +1416,10 @@ Group
 ```
 
 expenses.
+
+Pending group invitations are reached from the top bar's notification
+indicator rather than from the main navigation, so the navigation stays a list
+of sections rather than a list of tasks.
 
 ---
 
@@ -1719,8 +1813,11 @@ At minimum test:
 
 * Create group
 * Invite member
-* Accept invitation
+* Accept invitation (in the app, and from a link)
+* Decline invitation
 * Prevent duplicate membership
+* An invitation is only usable by the address it was sent to
+* An invitee cannot change the role an invitation grants
 
 ### Authorization
 
@@ -1906,6 +2003,7 @@ The first production-capable MVP should contain:
 
 * Create
 * Invite
+* In-app invitations: accept or decline
 * Join
 * View members
 
@@ -2191,8 +2289,10 @@ Implement:
 * Member list
 * Admin/member roles
 * Invitations
+* In-app invitations, with accept and decline
+* In-app notification count for pending invitations
 * Invitation acceptance
-* Email integration
+* Email integration (optional fallback for users without an account)
 
 ---
 
@@ -2367,7 +2467,8 @@ The project is considered successful when a normal user can:
 8. Configure categories.
 9. Set monthly category budgets.
 10. Invite other users.
-11. Send invitation emails.
+11. Have those users see the invitation in the application and accept or
+    decline it, without needing an email.
 12. Have invited users join the group.
 13. Add group expenses.
 14. Select which group member paid.

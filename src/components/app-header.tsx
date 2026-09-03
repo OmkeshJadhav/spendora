@@ -2,6 +2,7 @@ import { Wallet } from "lucide-react";
 import Link from "next/link";
 
 import { MainNav } from "@/components/main-nav";
+import { NotificationBell } from "@/components/notification-bell";
 import { SignOutButton } from "@/components/sign-out-button";
 import { APP_NAME } from "@/lib/constants";
 
@@ -10,7 +11,13 @@ import { APP_NAME } from "@/lib/constants";
  * screens and drops to its own row on small ones, rather than being a
  * shrunken copy of a desktop sidebar (specification section 34).
  */
-export function AppHeader({ name }: { name: string }) {
+export function AppHeader({
+  name,
+  invitationCount,
+}: {
+  name: string;
+  invitationCount: number;
+}) {
   return (
     <header className="border-b border-border bg-card">
       <div className="mx-auto w-full max-w-5xl px-6">
@@ -28,6 +35,7 @@ export function AppHeader({ name }: { name: string }) {
           </div>
 
           <div className="flex items-center gap-1">
+            <NotificationBell count={invitationCount} />
             <Link
               href="/settings"
               className="max-w-32 truncate rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"

@@ -15,7 +15,14 @@ contents of each unapplied file in numeric order → Run.
 ```bash
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0001_profiles.sql
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0002_core_schema.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/0003_invitation_preview.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/0004_admin_succession.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/0005_in_app_invitations.sql
 ```
+
+Apply them **in order**. 0004 and 0005 each replace a function that 0002 also
+defines, so running 0002 on its own afterwards would quietly reinstate the
+older versions.
 
 **Supabase CLI.**
 
@@ -37,21 +44,23 @@ is enabled. "Confirm email" is on by default; the app handles both settings:
 Under Authentication → URL Configuration, set the Site URL to your app origin
 (`http://localhost:3000` in development) so confirmation links point back to it.
 
-### Temporary: confirmation is currently off
+### Email delivery
 
-Until the email service is integrated in Phase 5, confirmation mail goes
-nowhere, so unconfirmed accounts cannot sign in. `npm run db:confirm-users`
-marks every unconfirmed account as confirmed and unblocks them.
+Two different senders are involved, and only one of them is ours:
 
-To avoid running it after every sign up, turn **Confirm email off** under
-Authentication → Sign In / Providers → Email. New sign ups then get a session
-straight away.
+- **Confirmation and recovery mail is sent by Supabase**, through whatever SMTP
+  the project is configured with. `EMAIL_API_KEY` has no bearing on it. The
+  built-in sender is heavily rate-limited and only reaches project members, so
+  set a custom SMTP provider under Authentication → Emails → SMTP Settings
+  before anyone else signs up.
+- **Invitation mail is sent by the application**, through `src/lib/email/`
+  (Resend). It needs `EMAIL_API_KEY` and an `EMAIL_FROM` on a domain verified
+  with the provider. Unverified, the provider refuses every recipient but your
+  own address.
 
-This is a development-only setting with real consequences — anyone can register
-with an address they do not own, and group invitations are addressed by email.
-It must be reverted before the application is deployed. The full reasoning and
-the revert checklist are in `project-progress.md`, under
-"Temporary: email confirmation bypassed".
+When invitation mail cannot be sent — no key, or the provider refuses — the
+invitation is still created and the admin is shown its one-time link to pass on
+by hand. That is a deliberate fallback, not an error path.
 
 ## Regenerating types
 
@@ -68,6 +77,9 @@ npx supabase gen types typescript --linked > src/types/database.ts
 | ---------------------- | --------------------------------------------------------- |
 | `0001_profiles.sql`    | `profiles` table, sign-up trigger, email-sync trigger, `updated_at` helper, RLS policies |
 | `0002_core_schema.sql` | `groups`, `group_members`, `group_invitations`, `categories`, `budgets`, `expenses` — plus the authorization helpers and every RLS policy |
+| `0003_invitation_preview.sql` | `invitation_preview()` — what an invitation link may show its holder, keyed by the token hash — and the `mask_email()` helper it uses |
+| `0004_admin_succession.sql` | Replaces `enforce_group_has_admin()` so deleting an *account* hands its groups on instead of failing |
+| `0005_in_app_invitations.sql` | `declined` status, the invitee's decline policy, `role`/`expires_at` pinning for non-admins, and `my_pending_invitations()` |
 
 ## Verifying authorization
 
@@ -80,6 +92,12 @@ attacker would not either.
 ```bash
 npm run db:verify-rls
 ```
+
+`scripts/verify-groups.mjs` (`npm run verify:groups`) covers Phase 5 the same
+way, and adds the other half: it drives the real forms over HTTP with a real
+session, so the Server Actions themselves are exercised, then proves each
+authorization claim again through PostgREST. It needs the application running
+(`npm run dev`).
 
 It needs `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`, used only to create and
 then delete the test accounts. The accounts are removed even when assertions
@@ -130,3 +148,28 @@ closes the invitation. There is no privileged "accept" endpoint to get wrong.
 
 **A group always has an admin.** The creator is made admin by a trigger, and the
 last admin cannot be demoted or removed — they have to delete the group instead.
+The one exception is a deletion nobody chose: when the last admin's *account*
+is deleted, the cascade hands the group to its longest-standing member, or
+deletes the group if there is nobody left (0004). Leaving a group with zero
+members would be worse than deleting it — `group_is_unclaimed()` makes a
+member-less group readable by every signed-in user, which exists so a creator
+can read back the group they just inserted.
+
+**An invitation link is a capability, and nothing more.** Only the SHA-256 of
+the emailed token is stored. `invitation_preview()` turns a token hash into
+just enough to render the invitation page — group name, inviter, currency, the
+invited address *masked*, and whether it is addressed to the reader — and never
+returns the group id. Joining is still the plain RLS insert from 0002.
+
+**Invitations are answered in the app; the link is the fallback.**
+`my_pending_invitations()` (0005) is the invitee's inbox, scoped by the database
+to their own email address. Accepting from the inbox and accepting from a link
+end in the same insert, allowed by the same policy — the token is a way of
+*finding* an invitation, never a way of being authorized for one. The link
+exists for somebody who has no account yet, and so has no inbox.
+
+**An invitee can decline, and can do nothing else.** One policy permits
+`pending → declined` on a row addressed to them. RLS `WITH CHECK` cannot see the
+old row, so it cannot forbid a role change in the same statement — the pinning
+trigger does that instead, resetting `role` and `expires_at` for anyone who is
+not an admin of the group.
