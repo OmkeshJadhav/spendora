@@ -8,7 +8,9 @@ export default function Loading() {
         <Skeleton className="h-8 w-40" />
         <Skeleton className="h-10 w-32" />
       </div>
-      <Skeleton className="h-4 w-24" />
+      {/* The scope navigator and the filter bar, which the list now carries. */}
+      <Skeleton className="h-9 w-64" />
+      <Skeleton className="h-52" />
       <div className="flex flex-col gap-2">
         <Skeleton className="h-16" />
         <Skeleton className="h-16" />

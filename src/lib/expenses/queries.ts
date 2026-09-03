@@ -3,6 +3,9 @@ import "server-only";
 import { cache } from "react";
 
 import { requireUser } from "@/lib/auth/dal";
+import { applyExpenseFilters } from "@/lib/expenses/filter-query";
+import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
+import { sumAmounts } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import type { Category, Expense } from "@/types";
 
@@ -76,21 +79,36 @@ export type ExpensePage = {
   total: number;
   page: number;
   pageCount: number;
+  /** Total of the rows the filters match, in minor units. */
+  filteredTotal: number;
 };
 
-/** One page of personal expenses, newest first. */
-export async function listPersonalExpenses(page = 1): Promise<ExpensePage> {
+/**
+ * One page of personal expenses, newest first.
+ *
+ * The search, filters and month scope are the same ones a group list uses
+ * (specification section 24) — `applyExpenseFilters` is shared, so the two
+ * lists cannot come to disagree about what "paid by cash in September" means.
+ * Only the owning clause differs, and it is stated here.
+ */
+export async function listPersonalExpenses({
+  page = 1,
+  filters = EMPTY_FILTERS,
+}: { page?: number; filters?: ExpenseFilters } = {}): Promise<ExpensePage> {
   const user = await requireUser();
   const supabase = await createClient();
 
   const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
   const from = (safePage - 1) * EXPENSES_PER_PAGE;
 
-  const { data, error, count } = await supabase
-    .from("expenses")
-    .select(EXPENSE_COLUMNS, { count: "exact" })
-    .eq("user_id", user.id)
-    .is("group_id", null)
+  const { data, error, count } = await applyExpenseFilters(
+    supabase
+      .from("expenses")
+      .select(EXPENSE_COLUMNS, { count: "exact" })
+      .eq("user_id", user.id)
+      .is("group_id", null),
+    filters,
+  )
     // created_at breaks ties so same-day expenses keep a stable order.
     .order("expense_date", { ascending: false })
     .order("created_at", { ascending: false })
@@ -98,6 +116,21 @@ export async function listPersonalExpenses(page = 1): Promise<ExpensePage> {
 
   if (error) {
     failed("list", error.message);
+  }
+
+  // Summed from its own query rather than from the rows on screen, which are
+  // only one page of what the filters matched.
+  const { data: amounts, error: totalError } = await applyExpenseFilters(
+    supabase
+      .from("expenses")
+      .select("amount")
+      .eq("user_id", user.id)
+      .is("group_id", null),
+    filters,
+  );
+
+  if (totalError) {
+    failed("listTotal", totalError.message);
   }
 
   const total = count ?? 0;
@@ -108,6 +141,7 @@ export async function listPersonalExpenses(page = 1): Promise<ExpensePage> {
     total,
     page: safePage,
     pageCount: Math.max(1, Math.ceil(total / EXPENSES_PER_PAGE)),
+    filteredTotal: sumAmounts((amounts ?? []).map((row) => row.amount)),
   };
 }
 

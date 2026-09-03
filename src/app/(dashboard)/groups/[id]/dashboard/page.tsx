@@ -24,7 +24,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
 import { requireUser } from "@/lib/auth/dal";
 import { getGroupDashboard } from "@/lib/dashboard/queries";
-import { formatMonthLabel, resolveMonth } from "@/lib/dates";
+import { formatMonthLabel, monthParam, resolveMonth } from "@/lib/dates";
 import { getGroupDetail } from "@/lib/groups/queries";
 
 export const metadata: Metadata = {
@@ -96,7 +96,19 @@ export default async function GroupDashboardPage(
         </Link>
       </div>
 
-      <MonthNav month={month} basePath={basePath} />
+      {/* The month reaches the expense list too, so "historical records"
+          (specification section 23) is one link rather than a second search. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <MonthNav month={month} basePath={basePath} />
+
+        <Link
+          href={`/groups/${group.id}/expenses?month=${monthParam(month)}`}
+          aria-label={`View this group's expenses for ${monthLabel}`}
+          className="rounded-md text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          View expenses
+        </Link>
+      </div>
 
       {!hasAnyExpenses ? (
         <Card>

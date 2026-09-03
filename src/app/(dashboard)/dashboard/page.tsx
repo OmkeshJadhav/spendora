@@ -22,7 +22,7 @@ import { FadeIn } from "@/components/ui/fade-in";
 import { requireProfile } from "@/lib/auth/dal";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
 import { getPersonalDashboard } from "@/lib/dashboard/queries";
-import { formatMonthLabel, resolveMonth } from "@/lib/dates";
+import { formatMonthLabel, monthParam, resolveMonth } from "@/lib/dates";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -81,7 +81,19 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
         </Link>
       </div>
 
-      <MonthNav month={month} basePath={BASE_PATH} />
+      {/* The month reaches the expense list too, so "historical records"
+          (specification section 23) is one link rather than a second search. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <MonthNav month={month} basePath={BASE_PATH} />
+
+        <Link
+          href={`/expenses?month=${monthParam(month)}`}
+          aria-label={`View expenses for ${monthLabel}`}
+          className="rounded-md text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          View expenses
+        </Link>
+      </div>
 
       {!hasAnyExpenses ? (
         <Card>

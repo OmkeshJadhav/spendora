@@ -3,7 +3,8 @@ import "server-only";
 import { cache } from "react";
 
 import { requireUser } from "@/lib/auth/dal";
-import { EMPTY_FILTERS, FILTER_UNCATEGORISED, type ExpenseFilters } from "@/lib/expenses/filters";
+import { applyExpenseFilters } from "@/lib/expenses/filter-query";
+import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
 import type { ExpenseCategory } from "@/lib/expenses/queries";
 import { sumAmounts } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
@@ -141,35 +142,6 @@ function decorate(expenses: Expense[], context: Decorations): GroupExpense[] {
 }
 
 /**
- * Applies the list's filters to a PostgREST query.
- *
- * Typed loosely on purpose: the same clauses are applied to the page query and
- * to the count query, which have different generic parameters.
- */
-function applyFilters<T extends {
-  eq: (column: string, value: string) => T;
-  is: (column: string, value: null) => T;
-}>(query: T, filters: ExpenseFilters): T {
-  let filtered = query;
-
-  if (filters.categoryId === FILTER_UNCATEGORISED) {
-    filtered = filtered.is("category_id", null);
-  } else if (filters.categoryId) {
-    filtered = filtered.eq("category_id", filters.categoryId);
-  }
-
-  if (filters.paidBy) {
-    filtered = filtered.eq("paid_by", filters.paidBy);
-  }
-
-  if (filters.paymentMode) {
-    filtered = filtered.eq("payment_mode", filters.paymentMode);
-  }
-
-  return filtered;
-}
-
-/**
  * One page of a group's expenses, newest first.
  *
  * `isAdmin` comes from the caller, which has already read the group's detail
@@ -190,7 +162,7 @@ export async function listGroupExpenses(
   const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
   const from = (safePage - 1) * GROUP_EXPENSES_PER_PAGE;
 
-  const { data, error, count } = await applyFilters(
+  const { data, error, count } = await applyExpenseFilters(
     supabase
       .from("expenses")
       .select(EXPENSE_COLUMNS, { count: "exact" })
@@ -208,10 +180,10 @@ export async function listGroupExpenses(
 
   // The page's rows are not the whole filtered set, so the total is summed
   // from its own query rather than from what happens to be on screen. This
-  // reads every matching amount: fine for a group's month, and the point at
-  // which a database-side aggregate is worth adding is Phase 8, where the
-  // dashboard needs several such figures at once.
-  const { data: amounts, error: totalError } = await applyFilters(
+  // reads every matching amount, which is fine for one group's expenses; a
+  // database-side aggregate is what the dashboard uses when several such
+  // figures are wanted at once.
+  const { data: amounts, error: totalError } = await applyExpenseFilters(
     supabase.from("expenses").select("amount").eq("group_id", groupId),
     filters,
   );

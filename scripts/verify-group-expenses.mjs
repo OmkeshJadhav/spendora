@@ -828,7 +828,9 @@ async function run() {
     assertIncludes(page.html, "Scooter hire", "filtered list");
     assertIncludes(page.html, "Airport taxi", "filtered list");
     assertExcludes(page.html, "Beach shack dinner", "filtered list kept an uncategorised expense");
-    assertIncludes(page.html, "Clear filters", "filtered list");
+    // Phase 9 renamed this control: the bar now clears a search and a date
+    // range as well as the filters, so "Clear all" is what it does.
+    assertIncludes(page.html, "Clear all", "filtered list");
   });
 
   await check("uncategorised expenses can be singled out", async () => {
@@ -869,7 +871,7 @@ async function run() {
       `/groups/${groupId}/expenses?paidBy=${mate.id}&paymentMode=upi`,
     );
     assertIncludes(page.html, "No expenses match these filters", "combined filter");
-    assertIncludes(page.html, "Clear filters", "combined filter");
+    assertIncludes(page.html, "Clear all", "combined filter");
   });
 
   await check("a nonsense filter value is ignored, not an error", async () => {

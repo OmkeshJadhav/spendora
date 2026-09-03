@@ -13,7 +13,7 @@ Tracks what has actually been built, phase by phase, against
 | 6     | Group expenses                 | ✅ Complete    |
 | 7     | Categories + budgets           | ✅ Complete    |
 | 8     | Dashboards                     | ✅ Complete    |
-| 9     | Search, filters + history      | ⬜ Not started |
+| 9     | Search, filters + history      | ✅ Complete    |
 | 10    | Export                         | ⬜ Not started |
 | 11    | UI polish                      | ⬜ Not started |
 | 12    | Testing + security audit       | ⬜ Not started |
@@ -1832,6 +1832,260 @@ Free-text search, the payment-mode and person filters, and date ranges
 (Phase 9); CSV export (Phase 10). Per-month budget *editing* remains out, as in
 Phase 7. The personal expense list still has no month selector of its own — the
 dashboard has one, and the list gets its filters in Phase 9.
+
+> Phase 9 has since delivered all of the above except CSV export and per-month
+> budget editing. See [Phase 9](#phase-9--search-filters--history-complete-4-september-2026).
+
+---
+
+## Phase 9 — Search, filters + history (complete, 4 September 2026)
+
+Specification §23 and §24: a month selector, free-text search, category,
+payment-mode, person and date-range filters, and historical records — on both
+the personal and the group expense list. No export; that is Phase 10 and
+nothing here anticipates it.
+
+### No migration was needed
+
+Phase 3's schema carries this phase whole. Every clause this adds lands on a
+column that already exists and an index that already covers it:
+`expenses_personal_date_idx` and `expenses_group_date_idx` are both ordered by
+`expense_date`, which is what a month scope and a date range narrow on, and
+`expenses_category_idx` and `expenses_group_paid_by_idx` cover the two id
+filters. Nothing in `supabase/migrations/` changed.
+
+Free-text search is the one clause with no index behind it, and that is
+deliberate — see "Search is `ILIKE`, not full-text" below.
+
+### What already existed, and what was actually missing
+
+Phase 6 had built three of this phase's seven controls for the *group* list
+only: category, paid-by and payment mode, parsed by `parseExpenseFilters` and
+applied by a local `applyFilters` inside `group-queries.ts`. Phase 8 had built
+`MonthNav` and put it on both dashboards.
+
+So the gap was narrower than the phase title suggests, and mostly about reach:
+
+- The personal list had **no filters at all** — not even the three the group
+  list already had.
+- Nothing anywhere searched text.
+- Nothing anywhere filtered by date range.
+- The month selector existed but stopped at the dashboards; the expense lists,
+  which are where §23 says historical records are read, had no notion of a
+  month.
+
+The work was therefore as much about making one implementation serve both
+lists as about adding controls.
+
+### What was built
+
+**`src/lib/expenses/filters.ts`** — rewritten. Still the pure half: parsing a
+query string into `ExpenseFilters`, and turning filters back into the
+parameters a link must carry. It grew `search`, `from`, `to` and `month`, plus
+`monthScope()`, `dateBounds()` and `filterParamsWithoutScope()`. It imports
+nothing server-only, so the filter bar can import it.
+
+**`src/lib/expenses/filter-query.ts`** — new, and the point of the phase.
+`applyExpenseFilters(query, filters)` turns those filters into PostgREST
+clauses, and **both** lists call it. A personal list and a group list now
+differ by exactly one thing — the owning clause the caller states — so they
+cannot come to disagree about what "paid by cash in September" means. The
+local `applyFilters` in `group-queries.ts` is gone.
+
+**`src/components/expenses/expense-filters.tsx`** — the filter bar, extended
+with a search box and From/To dates, and made to serve both lists. "Paid by"
+renders only when members are passed: on a personal list every expense is the
+viewer's own, so the control would have had exactly one option.
+
+**`src/components/expenses/expense-scope-nav.tsx`** — new. The time scope
+above a list, in whichever of its three states is in force: a month (with
+`MonthNav`'s arrows), a custom range (named, with "Clear dates"), or all time.
+`MonthNav` is reused rather than reimplemented — it already carries the other
+filters across a month change, disables its arrows at the ends of the allowed
+window, and announces the month it moved to.
+
+**`src/lib/expenses/queries.ts`** — `listPersonalExpenses` takes filters and
+returns `filteredTotal`, matching `listGroupExpenses`'s shape.
+
+**Both expense pages** — scope navigator, filter bar, a summary line that
+counts and totals *what matched*, filter-aware empty states, and pagination
+links that keep the filters.
+
+**Both dashboards** — a "View expenses" link beside the month navigator,
+carrying the month through to the list. §23 asks that changing the month update
+the expense list; this is the join that makes the dashboard's month and the
+list's month the same month.
+
+### One canonical answer to "when", from two controls
+
+A month selector and a date range are two ways of saying the same kind of
+thing, and left alone they contradict each other. The rule is stated once, in
+`dateBounds()`:
+
+1. `from`/`to`, if either is present.
+2. Otherwise `month`.
+3. Otherwise no bound at all.
+
+Three things follow, and each is deliberate:
+
+- **The filter bar has no `month` field.** It is a GET form, so submitting it
+  replaces the whole query string — choosing dates *drops* the month rather
+  than silently losing to it.
+- **`MonthNav`'s links carry `filterParamsWithoutScope()`**, not
+  `filterParams()`. Were they to carry the `from`/`to` they are replacing, the
+  range would keep winning and the arrows would appear to do nothing.
+- **The scope navigator shows only the control in force**, so the two are never
+  on screen contradicting each other.
+
+### The unfiltered list is all time, not this month
+
+The obvious reading of §22 ("a monthly expense list") is to default the list to
+the current month. It was not done, and the reason is worth recording: a page
+called "Expenses" that silently omits August is a page that has lost data as
+far as the person reading it is concerned. The month is one click away on the
+scope navigator, one link away from the dashboard, and permanent in a URL — and
+"all time" is the honest default for a list whose heading makes no claim about
+a month. The dashboards, whose headings *do* name a month, still default to the
+current one.
+
+### Search is `ILIKE`, not full-text
+
+`item_name ILIKE %term% OR notes ILIKE %term%`. A leading-wildcard `LIKE`
+cannot use a B-tree index, so this is a sequential scan of the rows RLS already
+narrowed to one person or one group — hundreds of rows, not millions. A
+`pg_trgm` GIN index or a `tsvector` column would both be real answers at a size
+this application does not have, and both would need a migration, a trigger and
+a decision about stemming. §50 says make the architecture correct and
+measurable first. The clause lives in one function, so replacing it later is a
+local change.
+
+### Two escapes, and why both are needed
+
+`ilikePattern()` in `filter-query.ts` escapes a search term twice, in order:
+
+1. **PostgreSQL's.** `%` and `_` are `LIKE` wildcards, and the default escape
+   character is a backslash. Without this, searching for "50%" would quietly
+   match every row containing "50" — wrong answers, silently.
+2. **PostgREST's.** Its filter grammar separates `or(...)` operands with
+   commas, so an unquoted term containing one would be cut in half into two
+   nonsense filters, or rejected outright. The value is wrapped in double
+   quotes; inside them, `"` and `\` are escaped with `\`.
+
+Step 2 doubles the backslashes step 1 introduced, which is correct: PostgREST
+unescapes them back to one before PostgreSQL ever sees the pattern. The suite
+proves both ends of this — a literal `%` matches nothing, and a term containing
+a comma, a quote, a bracket or a backslash returns a page rather than an error.
+
+### Lenient parsing, and why that is not a hole
+
+Nothing in a query string is validated the way a form submission is. An
+unreadable value is dropped, not rejected: `?category=not-a-uuid` shows the
+unfiltered list rather than an error page, because a stale link or a hand-typed
+URL is a normal thing to arrive with, and a list is the right answer to it. A
+range typed backwards is read as the range it describes rather than as a
+request for nothing.
+
+That is safe because a filter is not a permission. Ids are only shape-checked;
+whether one names a category or a member of *this* list's owner is settled by
+the query, which is scoped by the caller and runs under RLS. An id from
+somewhere else matches nothing — proved twice in the suite, once through the
+page and once against PostgREST directly.
+
+### Testing — `scripts/verify-search.mjs`, `npm run verify:search`
+
+50 checks, all passing, over the two surfaces the earlier suites use: the
+running application over HTTP as a signed-in browser, and PostgREST with each
+user's own JWT.
+
+| Section | What it covers |
+| --- | --- |
+| Nothing to narrow | An empty list offers a first expense, not a filter bar |
+| Seeding | Five personal expenses across two categories, three payment modes and three months |
+| Search | Name, notes, case, partial words, no matches, echo, literal `%` and `_`, commas, quotes, brackets, backslashes, matching totals |
+| Field filters | Category, uncategorised, payment mode, combinations, search + filter, unreadable values, another user's category |
+| Date range | From, to, inclusivity at both ends, a reversed range, the range named on screen |
+| Month scope and history | This month, a previous month, the month named, an empty month named, filters carried across the arrows, range-beats-month, the dashboard's link through |
+| Paging a filtered list | 21 matching rows over two pages; filters survive the page change and the link keeps them |
+| Group lists | Search on notes, paid-by, the members offered, a month in the group's currency, a date range, the group dashboard's link through |
+| A filter narrows, it never widens | Seven filtered requests by a stranger return nothing; a non-member gets a 404; two direct PostgREST attempts return nothing; a group filter matching only personal rows returns nothing |
+
+The last section is the one that matters. Every new control is a new way to ask
+the database a question, and the claim being tested is that none of them is a
+way to ask a *wider* question than before.
+
+**Assertions are anchored to the list, not to the page.** Phase 8 recorded the
+cost of matching a page-wide string: a search term is echoed into the search
+box, a category name appears in the filter dropdown, and a member's name
+appears in "Paid by" — so "the page mentions Groceries" is no evidence at all
+that a row for Groceries came back. `rows()` reads only the `<ul>` of expense
+rows and `itemNames()` reads only the item-name spans inside it, so a check can
+say exactly which rows the filter returned.
+
+### Three earlier assertions this phase broke, and what each actually was
+
+None of the three was a defect in the application. All three were assertions
+that matched a page-wide string, which is the failure mode Phase 8 recorded.
+
+**1. `verify:expenses` — "another user's list does not show these expenses".**
+Not a leak. Phase 4 asserted `assertExcludes(page.html, "Groceries")` against
+the *whole document*, and this phase put a search box on that page whose
+placeholder reads "Groceries, dinner with friends…". The test was reporting
+page furniture as somebody else's money.
+
+Changing the placeholder would have hidden the fragility rather than fixed it,
+so the assertion was anchored instead: a new `expenseRows()` helper in
+`scripts/verify-expenses.mjs` reads only the `<ul>` of expense rows, and the
+privacy check reads that. The privacy claim itself is unaffected and
+independently proved — Phase 9's own suite re-asks it across seven filter
+combinations, with row-anchored assertions, and passes.
+
+**2 and 3. `verify:group-expenses` — "filtering by category narrows the list"
+and "filters combine, and an empty result says so".** Both looked for the
+literal text "Clear filters". The control is still there and still does what
+those checks are about; it is now labelled **"Clear all"**, because the bar it
+sits in clears a search and a date range as well as the three filters Phase 6
+gave it. The label was the deliberate change; the two assertions were updated
+to match it rather than the copy being reverted to satisfy them.
+
+### Checks run
+
+### Decisions worth knowing
+
+- **One applier, two lists.** `applyExpenseFilters` is the whole reason this
+  phase is small. Adding a filter now means adding it in one place and it
+  appears, identically, on both lists.
+- **Filters are links, not state.** Everything is a GET form and a set of
+  anchors: a filtered list is shareable, the back button undoes a filter, and
+  the entire feature works with JavaScript turned off. No client-side store was
+  added, and none is needed.
+- **Applying a filter returns to page one.** A GET form replaces the whole
+  query string, `page` included. That is correct rather than incidental — page
+  3 of the old result set is not page 3 of the new one.
+- **The month wins for display, the range wins for data.** Stated once in
+  `dateBounds()`, and the UI is built so the two controls can never both claim
+  to be in force.
+- **"Paid by" is a group control.** A personal expense is always the viewer's
+  own, so the filter would have had one option. §24 lists it; on a personal
+  list it is answered by the list existing.
+- **The controls stay put while a filter is active**, even when the filter
+  matched nothing. Hiding them on an empty result would mean going *back* to
+  undo a filter rather than pressing "Clear all".
+- **An empty month says which month.** §26 asks for "No expenses recorded for
+  September 2026", not "no results" — the month is the thing the person needs
+  told back to them.
+
+### Deliberately not done in this phase
+
+CSV export, its filename and its formatting (Phase 10) — though the export will
+want the same `ExpenseFilters` this phase defined, so exporting "what I am
+looking at" should be a small addition rather than a second query language.
+
+Search remains `ILIKE` rather than full-text (above). The dashboard's category
+and member bars are still not clickable links into a filtered list: it is an
+appealing idea, but it would change chart markup that Phase 8's suite reads,
+and the month link beside the navigator already covers what §23 asks for. The
+personal list still has no per-category budget context — that lives on the
+categories page and the dashboard, which is where it belongs.
 
 ---
 

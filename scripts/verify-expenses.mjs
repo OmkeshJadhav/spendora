@@ -194,6 +194,18 @@ async function getPage(user, path) {
  * `noindex` robots tag, which is what this checks — along with the thing that
  * actually matters, that none of the record was rendered.
  */
+/**
+ * Just the expense rows of a list page, concatenated.
+ *
+ * An expense list also renders a filter bar carrying category names and
+ * example text, so "the page mentions X" is not evidence that a row for X was
+ * returned. Assertions about *what the list showed* read this instead.
+ */
+function expenseRows(html) {
+  const lists = html.match(/<ul class="divide-y divide-border[^"]*">[\s\S]*?<\/ul>/g) ?? [];
+  return lists.join("\n");
+}
+
 function assertNotFound(page, what) {
   assert(
     page.raw.includes("NEXT_HTTP_ERROR_FALLBACK;404"),
@@ -600,9 +612,15 @@ async function run() {
   await check("another user's list does not show these expenses", async () => {
     const page = await getPage(other, "/expenses");
     assert(page.status === 200, `status ${page.status}`);
-    assertExcludes(page.html, "Groceries", "other user's list");
-    assertExcludes(page.html, "Weekly shopping", "other user's list");
-    assertIncludes(page.html, "Their lunch", "other user's own expense");
+
+    // Anchored to the rows, not to the document. Phase 9 put a search box on
+    // this page whose placeholder is "Groceries, dinner with friends…", and a
+    // page-wide match reported that chrome as somebody else's expense. What
+    // the privacy claim is about is which rows came back.
+    const listed = expenseRows(page.html);
+    assertExcludes(listed, "Groceries", "other user's list");
+    assertExcludes(listed, "Weekly shopping", "other user's list");
+    assertIncludes(listed, "Their lunch", "other user's own expense");
   });
 
   await check("another user's dashboard totals only their own spending", async () => {

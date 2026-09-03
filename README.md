@@ -4,9 +4,10 @@ A monthly expense tracker for personal and shared spending. Record expenses,
 organise them into groups with per-category monthly budgets, and see where the
 money went — month by month.
 
-> **Status:** in development. Phases 1-2 (project foundation, Supabase
-> authentication and profiles) are complete; expenses, groups, budgets and
-> dashboards land in later phases. See
+> **Status:** in development. Phases 1-9 are complete — authentication,
+> personal and group expenses, groups and in-app invitations, categories and
+> budgets, dashboards, and search, filters and history. CSV export, UI polish
+> and the security audit land in later phases. See
 > [`project-progress.md`](./project-progress.md) for what exists today and
 > [`master-specifications.md`](./master-specifications.md) for the full plan.
 
@@ -109,8 +110,32 @@ npm run build      # Full production build
 
 ## Testing
 
-No test suite yet — tests are added alongside business logic, and the security
-and authorization suite arrives in Phase 12.
+Each phase ships an end-to-end suite under `scripts/`. They drive the running
+application over HTTP the way a signed-in browser does — submitting the real
+forms, including the no-JavaScript path — and also query PostgREST directly
+with each user's own JWT, so authorization claims are proved against the
+database rather than against the absence of a link.
+
+Start the app first, then run a suite:
+
+```bash
+npm run dev                    # in another terminal
+
+npm run db:verify-rls          # row-level security policies
+npm run verify:expenses        # personal expenses
+npm run verify:groups          # groups and invitations
+npm run verify:group-expenses  # group expenses
+npm run verify:budgets         # categories and budgets
+npm run verify:dashboards      # personal and group dashboards
+npm run verify:search          # search, filters and history
+```
+
+Each suite creates throwaway accounts and deletes them at the end, even on
+failure. They need `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` for that, and
+run against `http://localhost:3000` unless `BASE_URL` says otherwise. Because
+every page is compiled on demand under `next dev`, a full pass is slow.
+
+A consolidated security and authorization audit arrives in Phase 12.
 
 ## Project structure
 

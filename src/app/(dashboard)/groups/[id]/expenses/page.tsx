@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { ExpenseFilterBar } from "@/components/expenses/expense-filters";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { ExpensePagination } from "@/components/expenses/expense-pagination";
+import { ExpenseScopeNav } from "@/components/expenses/expense-scope-nav";
 import { GroupExpenseActions } from "@/components/expenses/group-expense-actions";
 import { FlashToast } from "@/components/flash-toast";
 import { GroupContext } from "@/components/groups/group-context";
@@ -14,9 +15,11 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
 import { requireUser } from "@/lib/auth/dal";
+import { formatMonthLabel } from "@/lib/dates";
 import {
   filterParams,
   hasActiveFilters,
+  monthScope,
   parseExpenseFilters,
 } from "@/lib/expenses/filters";
 import {
@@ -55,6 +58,7 @@ export default async function GroupExpensesPage(
   const searchParams = await props.searchParams;
   const filters = parseExpenseFilters(searchParams);
   const filtered = hasActiveFilters(filters);
+  const month = monthScope(filters);
 
   const [{ expenses, total, page, pageCount, filteredTotal }, categories] =
     await Promise.all([
@@ -111,14 +115,19 @@ export default async function GroupExpensesPage(
         </Link>
       </div>
 
-      {/* Filters are only worth the space once there is something to narrow. */}
+      {/* The controls are only worth the space once there is something to
+          narrow — but they stay put while a filter is active, otherwise
+          clearing one would mean going back rather than pressing "Clear". */}
       {total > 0 || filtered ? (
-        <ExpenseFilterBar
-          basePath={basePath}
-          filters={filters}
-          categories={categories.filter((category) => !category.is_archived)}
-          members={payers}
-        />
+        <>
+          <ExpenseScopeNav basePath={basePath} filters={filters} />
+          <ExpenseFilterBar
+            basePath={basePath}
+            filters={filters}
+            categories={categories.filter((category) => !category.is_archived)}
+            members={payers}
+          />
+        </>
       ) : null}
 
       {expenses.length === 0 ? (
@@ -126,11 +135,15 @@ export default async function GroupExpensesPage(
           {filtered ? (
             <EmptyState
               icon={SearchX}
-              title="No expenses match these filters"
-              description="Try widening them, or clear the filters to see everything in this group."
+              title={
+                month
+                  ? `No expenses recorded for ${formatMonthLabel(month)}`
+                  : "No expenses match these filters"
+              }
+              description="Try widening them, or clear them to see everything in this group."
               action={
                 <Link href={basePath} className={buttonVariants()}>
-                  Clear filters
+                  Clear all
                 </Link>
               }
             />
