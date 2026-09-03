@@ -2049,6 +2049,31 @@ to match it rather than the copy being reverted to satisfy them.
 
 ### Checks run
 
+| Check | Result |
+| --- | --- |
+| `npm run lint` | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | succeeds, 22 routes |
+| `npm run verify:search` | 50 passed, 0 failed |
+| `npm run verify:expenses` | 41 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+| `npm run verify:dashboards` | 51 passed, 0 failed |
+| `npm run verify:budgets` | 57 passed, 0 failed |
+| `npm run verify:groups` | 71 passed, 0 failed |
+| `npm run db:verify-rls` | 77 passed, 0 failed |
+
+401 checks across the seven suites, none failing.
+
+`verify:expenses` and `verify:group-expenses` are the figures from their
+re-runs, after the three assertions above were corrected; their first pass in
+this phase was 40/1 and 52/2. Every other suite passed first time, including
+`db:verify-rls` against the live database — which is the result to expect from
+a phase that adds no migration and changes no policy.
+
+The order was better than Phase 8's: the new suite was written and passing
+before the regression run started, so the earlier suites were the last thing
+standing rather than the first thing skipped.
+
 ### Decisions worth knowing
 
 - **One applier, two lists.** `applyExpenseFilters` is the whole reason this
