@@ -68,6 +68,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
         description={group.description}
         currencyCode={group.currency_code}
         role={role}
+        showDashboard
         showCategories
         showSettings={isAdmin}
       />

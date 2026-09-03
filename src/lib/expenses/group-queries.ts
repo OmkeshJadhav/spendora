@@ -79,36 +79,44 @@ export const listGroupCategories = cache(
   },
 );
 
-/** Display names for the group's members, keyed by user id. */
-async function memberNames(groupId: string): Promise<Map<string, string>> {
-  const supabase = await createClient();
+/**
+ * Display names for the group's members, keyed by user id.
+ *
+ * Exported because the group dashboard needs the same map to attribute
+ * spending to people (specification section 21) — one definition of "who is in
+ * this group", rather than two that can disagree.
+ */
+export const memberNames = cache(
+  async (groupId: string): Promise<Map<string, string>> => {
+    const supabase = await createClient();
 
-  const { data: members, error } = await supabase
-    .from("group_members")
-    .select("user_id")
-    .eq("group_id", groupId);
+    const { data: members, error } = await supabase
+      .from("group_members")
+      .select("user_id")
+      .eq("group_id", groupId);
 
-  if (error) {
-    failed("listMembers", error.message);
-  }
+    if (error) {
+      failed("listMembers", error.message);
+    }
 
-  const ids = (members ?? []).map((member) => member.user_id);
+    const ids = (members ?? []).map((member) => member.user_id);
 
-  if (ids.length === 0) {
-    return new Map();
-  }
+    if (ids.length === 0) {
+      return new Map();
+    }
 
-  const { data: profiles, error: profileError } = await supabase
-    .from("profiles")
-    .select("id, name")
-    .in("id", ids);
+    const { data: profiles, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, name")
+      .in("id", ids);
 
-  if (profileError) {
-    failed("listMemberProfiles", profileError.message);
-  }
+    if (profileError) {
+      failed("listMemberProfiles", profileError.message);
+    }
 
-  return new Map((profiles ?? []).map((profile) => [profile.id, profile.name]));
-}
+    return new Map((profiles ?? []).map((profile) => [profile.id, profile.name]));
+  },
+);
 
 type Decorations = {
   categories: ExpenseCategory[];

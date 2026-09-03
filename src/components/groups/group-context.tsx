@@ -1,4 +1,4 @@
-import { ArrowLeft, Settings, Tags } from "lucide-react";
+import { ArrowLeft, LayoutDashboard, Settings, Tags } from "lucide-react";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,7 @@ export function GroupContext({
   role,
   showSettings = false,
   showCategories = false,
+  showDashboard = false,
   backHref = "/groups",
   backLabel = "All groups",
 }: {
@@ -31,6 +32,8 @@ export function GroupContext({
   showSettings?: boolean;
   /** Links to this group's categories and budgets. Members read, admins set. */
   showCategories?: boolean;
+  /** Links to this group's dashboard, which every member may read. */
+  showDashboard?: boolean;
   backHref?: string;
   backLabel?: string;
 }) {
@@ -66,6 +69,16 @@ export function GroupContext({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {showDashboard ? (
+            <Link
+              href={`/groups/${groupId}/dashboard`}
+              className={buttonVariants({ size: "sm" })}
+            >
+              <LayoutDashboard aria-hidden />
+              Dashboard
+            </Link>
+          ) : null}
+
           {showCategories ? (
             <Link
               href={`/groups/${groupId}/categories`}

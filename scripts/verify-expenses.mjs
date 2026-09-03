@@ -390,7 +390,9 @@ async function run() {
   await check("the dashboard totals it", async () => {
     const page = await getPage(owner, "/dashboard");
     assertIncludes(page.html, "2,450.50", "dashboard total");
-    assertIncludes(page.html, "Total spent", "dashboard");
+    // Phase 8 renamed this card from "Total spent" to "Spent", so the four
+    // summary cards read as one row rather than one of them shouting.
+    assertIncludes(page.html, "Spent", "dashboard");
     assertExcludes(page.html, "No expenses yet", "dashboard");
   });
 

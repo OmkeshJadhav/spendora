@@ -47,6 +47,7 @@ export default async function GroupCategoriesPage(
         role={role}
         backHref={`/groups/${group.id}`}
         backLabel="Back to group"
+        showDashboard
         showSettings={isAdmin}
       />
 

@@ -96,6 +96,17 @@ export function formatMonthLabel({ year, month }: MonthKey): string {
   }).format(new Date(year, month - 1, 1));
 }
 
+/** "Sep", or "Sep 2026" when the year needs saying — for a chart axis. */
+export function formatMonthShort(
+  { year, month }: MonthKey,
+  withYear = false,
+): string {
+  return new Intl.DateTimeFormat(DATE_LOCALE, {
+    month: "short",
+    ...(withYear ? { year: "numeric" as const } : {}),
+  }).format(new Date(year, month - 1, 1));
+}
+
 /** The month a given calendar day falls in. */
 export function monthKeyOf(value: IsoDate): MonthKey {
   const [year, month] = value.split("-").map(Number);

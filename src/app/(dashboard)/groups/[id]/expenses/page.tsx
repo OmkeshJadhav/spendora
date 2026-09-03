@@ -89,6 +89,7 @@ export default async function GroupExpensesPage(
         role={role}
         backHref={`/groups/${group.id}`}
         backLabel="Back to group"
+        showDashboard
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">

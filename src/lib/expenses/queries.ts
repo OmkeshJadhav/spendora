@@ -3,14 +3,8 @@ import "server-only";
 import { cache } from "react";
 
 import { requireUser } from "@/lib/auth/dal";
-import {
-  elapsedDaysInMonth,
-  monthRange,
-  type IsoDate,
-} from "@/lib/dates";
-import { percentageOf, sumAmounts, toMinorUnits } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
-import type { Category, Expense, MonthKey } from "@/types";
+import type { Category, Expense } from "@/types";
 
 /**
  * Reads of the signed-in user's personal expenses.
@@ -27,25 +21,6 @@ export type ExpenseCategory = Pick<Category, "id" | "name" | "is_archived">;
 
 /** An expense with its category resolved for display. */
 export type PersonalExpense = Expense & { category: ExpenseCategory | null };
-
-export type CategoryTotal = {
-  id: string | null;
-  name: string;
-  /** Minor units, summed exactly. */
-  total: number;
-  /** Whole-number share of the month's spending. */
-  share: number;
-};
-
-export type MonthSummary = {
-  month: MonthKey;
-  /** Minor units. */
-  total: number;
-  count: number;
-  /** Minor units, per day elapsed so far this month. */
-  averageDaily: number;
-  categories: CategoryTotal[];
-};
 
 /** Columns every expense read selects. Listed once so they cannot drift. */
 const EXPENSE_COLUMNS =
@@ -192,65 +167,4 @@ export async function getPersonalExpense(
   const categories = await listPersonalCategories();
 
   return attachCategories([data], categories)[0];
-}
-
-const UNCATEGORISED = "Uncategorised";
-
-/**
- * Totals for one month (specification section 17).
- *
- * The month's rows are summed here in integer minor units rather than in SQL:
- * one user-month is a small, bounded set, and PostgREST does not expose
- * aggregates by default. Group dashboards, which aggregate across members,
- * will need a database-side summary instead.
- */
-export async function getPersonalMonthSummary(
-  month: MonthKey,
-): Promise<MonthSummary> {
-  const user = await requireUser();
-  const supabase = await createClient();
-  const { start, end } = monthRange(month);
-
-  const { data, error } = await supabase
-    .from("expenses")
-    .select("amount, category_id")
-    .eq("user_id", user.id)
-    .is("group_id", null)
-    .gte("expense_date", start satisfies IsoDate)
-    .lte("expense_date", end satisfies IsoDate);
-
-  if (error) {
-    failed("monthSummary", error.message);
-  }
-
-  const rows = data ?? [];
-  const total = sumAmounts(rows.map((row) => row.amount));
-  const elapsed = elapsedDaysInMonth(month);
-
-  const categories = await listPersonalCategories();
-  const nameById = new Map(categories.map((c) => [c.id, c.name]));
-
-  const totals = new Map<string | null, number>();
-
-  for (const row of rows) {
-    const key = row.category_id;
-    totals.set(key, (totals.get(key) ?? 0) + toMinorUnits(row.amount));
-  }
-
-  const breakdown: CategoryTotal[] = [...totals.entries()]
-    .map(([id, amount]) => ({
-      id,
-      name: id ? (nameById.get(id) ?? UNCATEGORISED) : UNCATEGORISED,
-      total: amount,
-      share: percentageOf(amount, total),
-    }))
-    .sort((a, b) => b.total - a.total);
-
-  return {
-    month,
-    total,
-    count: rows.length,
-    averageDaily: elapsed > 0 ? Math.round(total / elapsed) : 0,
-    categories: breakdown,
-  };
 }

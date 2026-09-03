@@ -12,7 +12,7 @@ Tracks what has actually been built, phase by phase, against
 | 5     | Groups + in-app invitations    | ✅ Complete    |
 | 6     | Group expenses                 | ✅ Complete    |
 | 7     | Categories + budgets           | ✅ Complete    |
-| 8     | Dashboards                     | ⬜ Not started |
+| 8     | Dashboards                     | ✅ Complete    |
 | 9     | Search, filters + history      | ⬜ Not started |
 | 10    | Export                         | ⬜ Not started |
 | 11    | UI polish                      | ⬜ Not started |
@@ -1557,6 +1557,281 @@ text search, the payment-mode and person filters and date ranges (Phase 9);
 CSV export (Phase 10). Per-month budget *editing* is deliberately left out, as
 above. Budgets do not yet appear on either dashboard — that is Phase 8's
 first job, and `getBudgetOverview()` is the function it will call.
+
+---
+
+## Phase 8 — Dashboards (complete, 3 September 2026)
+
+Specification §17-21 and §37-38: a personal dashboard and a group dashboard,
+each with a monthly summary, a category breakdown, monthly expenditure and
+budget charts — plus spending per member for a group.
+
+### Regression runs
+
+Unlike the previous phases, the earlier suites were re-run *after* this phase
+rather than before it. That was the wrong order, and it cost something: a stale
+assertion in Phase 4's suite (below) was found at the end instead of being
+ruled out at the start. All five earlier suites were eventually run in full and
+all five pass — see "Checks run" at the end of this section.
+
+### No migration was needed
+
+Phase 3's schema carries this phase whole. A dashboard is a read, and every
+read it needs is an existing table with an existing index behind an existing
+policy. Nothing in `supabase/migrations/` changed.
+
+### Built on Phase 7 rather than beside it
+
+`getBudgetOverview(owner, month)` already answered "what was spent in each
+category this month, against what budget" for a personal area or a group. The
+dashboards call it rather than asking the database the same question again, so
+a dashboard costs the budget overview plus **one** range query — and for a
+group, one more for who paid.
+
+That also means the figure on the dashboard and the figure on the categories
+page cannot disagree: they are the same function's return value.
+
+The consequence is that `getPersonalMonthSummary()` in
+`src/lib/expenses/queries.ts` — Phase 4's narrower version of the same sum —
+was **deleted** along with its `MonthSummary` and `CategoryTotal` types. Two
+implementations of "this month's spending per category" is exactly the drift
+this phase was meant to remove.
+
+### What was built
+
+**Summary arithmetic — `src/lib/dashboard/summary.ts`**
+
+Pure, free of any server import, in integer minor units, so the same functions
+decide what a page renders and what a test asserts:
+
+- `categoryTotals()` — ranks the month's spending, drops categories with
+  nothing in them, keeps uncategorised spending as a row of its own so the
+  parts always add up to the total printed above them, and folds the tail past
+  six into "Other categories (n)".
+- `memberTotals()` — spending per member, including members who paid nothing
+  (a zero is information; a row that vanished would read as a bug), and
+  keeping a row for somebody who paid and has since left, because their money
+  is still in the total.
+- `averageDaily()` — divides by days *elapsed*, so a figure read on the 3rd is
+  not diluted by the 27 days that have not happened.
+
+Shares are whole numbers rounded independently, so a set of them can total 99
+or 101. That is deliberate: the alternative is an adjusted percentage that does
+not match the amount printed beside it.
+
+**Reads — `src/lib/dashboard/queries.ts`**
+
+- `monthlyTrend(owner, month, months)` — one range query for the whole window,
+  bucketed by the `YYYY-MM` prefix of `expense_date`. Slicing the stored string
+  rather than parsing it means no timezone can move a row into the wrong month.
+  Months with nothing in them are returned at zero, because a gap in a trend is
+  information and a chart that skipped them would compress the axis.
+- `memberSpending(groupId, month, viewerId)` — attribution by `paid_by`, not by
+  who typed the expense in. A member may record that somebody else paid, and it
+  is the payer the group cares about. This is also the figure a settlement
+  feature would later be computed from (§46).
+- `getPersonalDashboard(month)` and `getGroupDashboard(groupId, month, isAdmin)`
+  — each composing the above in parallel.
+
+**Charts — `src/components/charts/`**
+
+Hand-built, with no chart library. Every visualisation this phase needs is a
+single series of magnitudes, which is a `<div>` with a width or a height; a
+library would have added a dependency, a client bundle and a hydration step to
+draw a rectangle.
+
+- `bar-list.tsx` — the ranked horizontal bar chart, used for both category
+  spending and member spending, because they are the same question. Bars are
+  scaled against the largest value (so the width compares magnitudes) while the
+  share of the total is printed as text. 8px marks, square at the baseline and
+  rounded at the data end.
+- `column-chart.tsx` — monthly expenditure. Every column is a **link to that
+  month**, so the chart is also the fastest way to move through history.
+
+**Presentation — `src/components/dashboard/`**
+
+`month-summary.tsx` (the four stat cards plus the overall budget meter),
+`category-breakdown.tsx`, `monthly-trend.tsx`, `member-spending.tsx`, and
+`budget-table.tsx` — the category-by-category budget/spent/remaining/% table
+§19 asks for, which scrolls sideways in its own container on a narrow screen
+rather than squeezing the page.
+
+**Pages**
+
+`/dashboard` rewritten, and `/groups/[id]/dashboard` added, each with a
+skeleton `loading.tsx`. The group dashboard is linked from `GroupContext`, so
+it is one click from the group's home, its expenses and its categories.
+
+### A decision worth explaining: no donut chart
+
+§38 suggests a donut or pie for category spending. This phase deliberately used
+a **ranked horizontal bar list** instead, and the reason is measurable rather
+than aesthetic.
+
+A pie tells its slices apart by colour alone, so the palette has to survive
+colour-vision deficiency. The categorical palette was run through the data-viz
+validator, which reports pairwise perceptual distance under deutan, protan and
+tritan simulation:
+
+```text
+3 slices  →  PASS in both light and dark
+4 slices  →  FAIL (blue↔violet ΔE 1.9 dark; yellow↔orange ΔE 4.8 dark)
+5 slices  →  FAIL (magenta↔orange ΔE 12.9, below the 15 normal-vision floor)
+```
+
+A real month has more than three categories. A six-slice donut would therefore
+be asking a substantial number of people to distinguish colours they cannot,
+for a reading — "what did I spend most on?" — that a ranked bar answers better
+anyway, with the amount and the share printed as text on every row.
+
+Everything the donut would have shown is still shown: the parts, their shares,
+and the whole. The one thing lost is the circle.
+
+Colour is used only where a single hue carries a single series, plus the
+existing reserved status colours (healthy / nearing / over budget), which never
+appear without their worded badge.
+
+### Three bugs this phase found and fixed
+
+1. **"Over budget" with no budget at all.** `budgetTotals.remaining` is
+   `budget − spent`, which is negative whenever anything was spent and no
+   budget exists. Both the new summary cards and — as it turned out — Phase 7's
+   categories page titled that card "Over budget" for somebody who had never
+   set one. Both now check `hasBudget` first. The value was always correct; the
+   heading was the lie.
+
+2. **A dashboard that never appeared as a page.** During development the group
+   dashboard was reachable only by typing its URL. `GroupContext` gained a
+   `showDashboard` link and the group's home, expenses and categories pages all
+   pass it, which the suite now asserts.
+
+3. **Chart labels read "₹150.0".** `formatCompactMinorUnits` set
+   `maximumFractionDigits: 1` and nothing else. Currency formatting defaults to
+   two decimal places, and a maximum below that clamps the *minimum* up to it
+   rather than allowing none — so every figure that did not need a decimal
+   gained a trailing zero: "₹3.0K", "₹150.0", "8500,0 €". Adding
+   `minimumFractionDigits: 0` fixes it. This one was found by looking at the
+   formatter's actual output across all four currencies rather than by a test,
+   because nothing asserted the shortened label; a check that pins it was added
+   with the fix, using a whole-thousand month, since a value like 8,500 shortens
+   identically either way and would not have caught it.
+
+   Worth knowing: each locale compacts in its own units, which is why the
+   formatter asks the locale rather than dividing by 1,000 itself. An Indian
+   reader gets "₹12.5L" for 1,250,000 rather than a lakh spelled as millions,
+   and German does not abbreviate below a million at all.
+
+A further change was needed in an older suite rather than in the application:
+Phase 4's `verify-expenses.mjs` asserted the dashboard card was titled "Total
+spent". Phase 8 renamed it to "Spent" so the four summary cards read as one row
+rather than one of them shouting. The assertion was updated, with a comment
+saying why, and the suite passes.
+
+### Testing — `scripts/verify-dashboards.mjs`, `npm run verify:dashboards`
+
+51 checks, over the same two surfaces the earlier suites use: the running
+application over HTTP (submitting the actual forms, which is the
+no-JavaScript path and therefore runs the real Server Actions), and PostgREST
+directly with each user's own JWT, which is what somebody reaches when they
+skip the UI.
+
+| Group                                   | Checks |
+| --------------------------------------- | ------ |
+| Empty states                            | 3      |
+| Monthly summary                         | 5      |
+| Category breakdown                      | 5      |
+| Monthly expenditure                     | 6      |
+| Historical months                       | 4      |
+| Budget vs actual on the dashboard       | 6      |
+| Group dashboard                         | 12     |
+| Authorization, proved against the database | 10  |
+
+Worth calling out among them:
+
+- Every figure is arithmetic checked against amounts the suite itself entered:
+  the total, the count, the average daily (divided by days elapsed for the
+  current month, by the month's whole length for a completed one), each
+  category's share, each member's share, and every budget's remaining and
+  percentage.
+- Bar widths and column heights are read out of the rendered `style`
+  attributes, so "proportional" is asserted rather than assumed.
+- 6,200 of an 8,000 budget renders as **78% and "On track"** — the rounded
+  percentage says 78 while the state is computed from the exact 77.5%, below
+  the 80% threshold. The suite pins both halves of that.
+- Member spending follows "Paid by": an expense the admin recorded on the
+  member's behalf counts towards the **member**.
+- A personal expense never reaches a group dashboard and a group expense never
+  reaches a personal one — asserted in both directions, and one group's figures
+  never appear on another's.
+- A non-member gets a not-found for a group dashboard, a signed-out visitor
+  gets the sign-in page, and a member is refused a budget write by the database
+  and not merely by a hidden button.
+
+Three defects in the suite itself were found and fixed while getting it green,
+each of which would have made it lie rather than fail honestly:
+
+1. **The suite was reading the hydration payload, not the page.** Next inlines
+   the RSC payload in `<script>` tags, which repeats every `href`, class and
+   inline style of the page as escaped JSON — and, for a streamed page, *before*
+   the markup it belongs to. "Find this month's link, then read the next
+   `height:`" found the link inside the payload and then the first bar in the
+   real document, reporting the tallest column as 1%. `readable()` now strips
+   `<script>` blocks, so an assertion can only ever see what was rendered.
+2. **A category name is not proof of a chart row.** `barRow()` took any `<li>`
+   containing the name, and an expense row carries its category in a badge — so
+   a category absent from a breakdown was reported as present, from the recent
+   expenses list beside it. Rows must now contain a bar.
+3. **The month navigator's back arrow is also a link to last month**, and it
+   sits earlier in the document than the chart, so `column()` matched the arrow
+   and measured whichever column followed. Columns must now contain a column.
+
+All three were the same mistake: matching a page-wide string and trusting what
+came after it. Every helper is now anchored to the element it claims to read.
+
+### Checks run
+
+| Check                           | Result                                  |
+| ------------------------------- | --------------------------------------- |
+| `npm run lint`                  | clean                                   |
+| `npm run typecheck`             | clean                                   |
+| `npm run build`                 | succeeds, 22 routes                     |
+| `npm run verify:dashboards`     | 51 passed, 0 failed                     |
+| `npm run db:verify-rls`         | 77 passed, 0 failed                     |
+| `npm run verify:expenses`       | 41 passed, 0 failed                     |
+| `npm run verify:groups`         | 71 passed, 0 failed                     |
+| `npm run verify:group-expenses` | 54 passed, 0 failed                     |
+| `npm run verify:budgets`        | 57 passed, 0 failed                     |
+
+351 checks across the six suites, none failing. One caveat worth recording for
+next time: these HTTP suites run against `next dev`, where every page is
+compiled on demand, and on the machine this phase was built on a full pass took
+several hours per suite. That is a reason to run them earlier, not a reason to
+skip them.
+
+### Decisions worth knowing
+
+- **The trend window is six months.** Long enough to read a trend, short enough
+  that six columns stay legible on a phone. It is a constant, `TREND_MONTHS`.
+- **The chart is a navigation control.** Clicking a column opens that month.
+  Together with `MonthNav` this is most of what §23 asks of Phase 9 — arriving
+  early because a dashboard without a month selector is a dashboard of one
+  month.
+- **A dashboard reports, the categories page manages.** The dashboard shows
+  only categories that were spent in or budgeted; the full list, including
+  unused and archived ones, stays where they are edited.
+- **The group dashboard is a separate route**, not the group's home page. The
+  home page is where members, invitations and settings live; conflating the two
+  would have made both longer and neither better.
+- **Empty is not the same as new.** A month with no expenses shows an empty
+  month, with its trend intact. The first-run "add your first expense" screen
+  appears only when there is genuinely nothing anywhere.
+
+### Deliberately not done in this phase
+
+Free-text search, the payment-mode and person filters, and date ranges
+(Phase 9); CSV export (Phase 10). Per-month budget *editing* remains out, as in
+Phase 7. The personal expense list still has no month selector of its own — the
+dashboard has one, and the list gets its filters in Phase 9.
 
 ---
 

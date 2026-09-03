@@ -58,6 +58,38 @@ export function formatMinorUnits(
   return formatCurrency(fromMinorUnits(minor), code);
 }
 
+/**
+ * "₹8.5K" — a total shortened to fit a chart label.
+ *
+ * Only ever used where the exact figure is also available in text nearby or as
+ * the label a screen reader reads: a rounded number is a label, never the
+ * answer.
+ *
+ * `minimumFractionDigits: 0` is not optional. Currency formatting defaults to
+ * two decimal places, and a `maximumFractionDigits` below that clamps the
+ * *minimum* up to it rather than allowing none — so without it every
+ * uncompacted figure gains a trailing zero and reads as "₹150.0", which is not
+ * how money is written.
+ *
+ * Each locale compacts in its own units, which is the point of asking it: an
+ * Indian reader gets "₹12.5L" for 1,250,000 rather than a lakh spelled as
+ * millions, and German does not abbreviate below a million at all.
+ */
+export function formatCompactMinorUnits(
+  minor: number,
+  code: CurrencyCode = DEFAULT_CURRENCY_CODE,
+): string {
+  const currency = currencyOf(code);
+
+  return new Intl.NumberFormat(currency.locale, {
+    style: "currency",
+    currency: currency.code,
+    notation: "compact",
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 0,
+  }).format(fromMinorUnits(minor));
+}
+
 /** A whole-number percentage share, safe when the total is zero. */
 export function percentageOf(part: number, total: number): number {
   if (total <= 0) {

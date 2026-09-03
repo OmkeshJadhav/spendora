@@ -1,14 +1,19 @@
 import type { Metadata } from "next";
-import { Plus, ReceiptText, TrendingUp, Wallet } from "lucide-react";
+import { Plus, ReceiptText, Wallet } from "lucide-react";
 import Link from "next/link";
 
+import { BudgetTable } from "@/components/dashboard/budget-table";
 import { CategoryBreakdown } from "@/components/dashboard/category-breakdown";
-import { StatCard } from "@/components/dashboard/stat-card";
+import { MonthlyTrend } from "@/components/dashboard/monthly-trend";
+import { MonthSummary } from "@/components/dashboard/month-summary";
 import { AddExpenseFab } from "@/components/expenses/add-expense-fab";
+import { ExpenseList } from "@/components/expenses/expense-list";
+import { MonthNav } from "@/components/month-nav";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -16,31 +21,43 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
 import { requireProfile } from "@/lib/auth/dal";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
-import { currentMonthKey, elapsedDaysInMonth, formatMonthLabel } from "@/lib/dates";
-import {
-  getPersonalMonthSummary,
-  listRecentPersonalExpenses,
-} from "@/lib/expenses/queries";
-import { formatCurrency, formatMinorUnits } from "@/lib/money";
+import { getPersonalDashboard } from "@/lib/dashboard/queries";
+import { formatMonthLabel, resolveMonth } from "@/lib/dates";
 
 export const metadata: Metadata = {
   title: "Dashboard",
 };
 
-const RECENT_LIMIT = 5;
+const BASE_PATH = "/dashboard";
 
-export default async function DashboardPage() {
+/**
+ * The personal dashboard (specification section 17).
+ *
+ * Private by construction: every figure comes from `getPersonalDashboard`,
+ * which reads only rows with `group_id is null` belonging to the signed-in
+ * user, on top of RLS that would return nothing else anyway.
+ *
+ * The month is a URL parameter rather than client state, so this view is
+ * linkable, the back button steps through months, and the whole page works
+ * with no JavaScript.
+ */
+export default async function DashboardPage(props: PageProps<"/dashboard">) {
   const profile = await requireProfile();
-  const month = currentMonthKey();
+  const searchParams = await props.searchParams;
 
-  const [summary, recent] = await Promise.all([
-    getPersonalMonthSummary(month),
-    listRecentPersonalExpenses(RECENT_LIMIT),
-  ]);
+  const month = resolveMonth(
+    Array.isArray(searchParams.month) ? searchParams.month[0] : searchParams.month,
+  );
 
+  const dashboard = await getPersonalDashboard(month);
   const monthLabel = formatMonthLabel(month);
-  const elapsed = elapsedDaysInMonth(month);
-  const hasAnyExpenses = recent.length > 0;
+
+  // "Has this person ever recorded anything?", not "did they spend this
+  // month?" — an empty September for somebody with two years of history
+  // should show an empty September, not a first-run welcome.
+  const hasAnyExpenses =
+    dashboard.recent.length > 0 ||
+    dashboard.trend.some((point) => point.count > 0);
 
   return (
     <FadeIn className="flex flex-col gap-6">
@@ -64,12 +81,14 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
+      <MonthNav month={month} basePath={BASE_PATH} />
+
       {!hasAnyExpenses ? (
         <Card>
           <EmptyState
             icon={Wallet}
             title="No expenses yet"
-            description="Add your first expense and this dashboard will show your monthly total, category breakdown and recent activity."
+            description="Add your first expense and this dashboard will show your monthly total, category breakdown, budgets and spending trend."
             action={
               <Link href="/expenses/new" className={buttonVariants()}>
                 <Plus aria-hidden />
@@ -80,83 +99,62 @@ export default async function DashboardPage() {
         </Card>
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <StatCard
-              title="Total spent"
-              value={formatMinorUnits(summary.total, DEFAULT_CURRENCY_CODE)}
-              hint={monthLabel}
-              icon={Wallet}
-            />
-            <StatCard
-              title="Expenses"
-              value={String(summary.count)}
-              hint={summary.count === 1 ? "record" : "records"}
-              icon={ReceiptText}
-            />
-            <StatCard
-              title="Average daily"
-              value={formatMinorUnits(
-                summary.averageDaily,
-                DEFAULT_CURRENCY_CODE,
-              )}
-              hint={`Over ${elapsed} ${elapsed === 1 ? "day" : "days"} so far`}
-              icon={TrendingUp}
-            />
-          </div>
+          <MonthSummary
+            overview={dashboard.overview}
+            averageDaily={dashboard.averageDaily}
+            currencyCode={DEFAULT_CURRENCY_CODE}
+          />
+
+          <MonthlyTrend
+            points={dashboard.trend}
+            currencyCode={DEFAULT_CURRENCY_CODE}
+            basePath={BASE_PATH}
+          />
 
           <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Spending by category</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {summary.categories.length > 0 ? (
-                  <CategoryBreakdown
-                    categories={summary.categories}
-                    currencyCode={DEFAULT_CURRENCY_CODE}
-                  />
-                ) : (
-                  <p className="py-4 text-sm text-muted-foreground">
-                    No expenses recorded for {monthLabel}.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+            <CategoryBreakdown
+              categories={dashboard.categories}
+              currencyCode={DEFAULT_CURRENCY_CODE}
+              month={month}
+              categoriesHref="/categories"
+            />
 
             <Card>
               <CardHeader className="flex-row items-center justify-between">
-                <CardTitle>Recent expenses</CardTitle>
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base text-foreground">
+                    <ReceiptText
+                      aria-hidden
+                      className="size-4 text-muted-foreground"
+                    />
+                    Recent expenses
+                  </CardTitle>
+                  <CardDescription>
+                    Your latest records, whichever month they fall in.
+                  </CardDescription>
+                </div>
                 <Link
                   href="/expenses"
-                  className="text-sm font-medium text-primary hover:underline rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="rounded-md text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   View all
                 </Link>
               </CardHeader>
-              <CardContent className="text-sm">
-                <ul className="divide-y divide-border">
-                  {recent.map((expense) => (
-                    <li
-                      key={expense.id}
-                      className="flex items-center justify-between gap-4 py-2.5"
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">
-                          {expense.item_name}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {expense.category?.name ?? "Uncategorised"}
-                        </span>
-                      </span>
-                      <span className="tabular shrink-0 font-medium">
-                        {formatCurrency(expense.amount, DEFAULT_CURRENCY_CODE)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              <CardContent>
+                <ExpenseList
+                  expenses={dashboard.recent}
+                  currencyCode={DEFAULT_CURRENCY_CODE}
+                />
               </CardContent>
             </Card>
           </div>
+
+          <BudgetTable
+            overview={dashboard.overview}
+            currencyCode={DEFAULT_CURRENCY_CODE}
+            manageHref="/categories"
+            canManage
+          />
         </>
       )}
 

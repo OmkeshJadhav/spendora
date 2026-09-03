@@ -103,7 +103,7 @@ export function CategoryBudgets({
           icon={Wallet}
         />
         <StatCard
-          title={totals.remaining < 0 ? "Over budget" : "Remaining"}
+          title={totals.hasBudget && totals.remaining < 0 ? "Over budget" : "Remaining"}
           value={
             totals.hasBudget
               ? formatMinorUnits(Math.abs(totals.remaining), currencyCode)
