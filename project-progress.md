@@ -10,7 +10,7 @@ Tracks what has actually been built, phase by phase, against
 | 3     | Database schema + RLS          | ✅ Complete    |
 | 4     | Personal expense tracking      | ✅ Complete    |
 | 5     | Groups + in-app invitations    | ✅ Complete    |
-| 6     | Group expenses                 | ⬜ Not started |
+| 6     | Group expenses                 | ✅ Complete    |
 | 7     | Categories + budgets           | ⬜ Not started |
 | 8     | Dashboards                     | ⬜ Not started |
 | 9     | Search, filters + history      | ⬜ Not started |
@@ -1082,6 +1082,213 @@ sending an email to consider the project finished.
   page. A popover would be a second place to keep the same list correct.
 - **Declined is recorded, not deleted.** An admin needs to know the answer was
   no, and the "one pending per email" index frees up either way.
+
+---
+
+## Phase 6 — Group expenses (complete, 3 September 2026)
+
+Recording, listing, editing, deleting and filtering a group's expenses, with a
+paid-by picker and the group's own categories. No budgets, no group dashboard,
+no charts — those are Phases 7 and 8, and nothing here anticipates them.
+
+### Phases 1-5 re-verified first
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 16 routes |
+| `npm run verify:expenses` | ✅ 41 passed |
+| `npm run verify:groups` | ✅ 71 passed |
+| `npm run db:verify-rls` | ✅ 77 passed, against the live database |
+
+### No migration was needed
+
+Phase 3 built the schema for both kinds of expense at once, and this phase is
+what finally exercises the group half of it. Everything Phase 6 needs was
+already there and already tested:
+
+- `expenses.group_id` with `user_id` as the *recorder*, so "who wrote it down"
+  and "who paid" are separate columns (`paid_by`).
+- `expenses_check_paid_by`, the trigger that insists the payer is a member of
+  the group **at the time of writing** — and, being a trigger rather than a
+  foreign key, lets a departed member's expenses stay with the group.
+- The composite `(group_id, currency_code) → groups(id, currency_code)` key,
+  which is what makes a group expense carry its group's currency and nothing
+  else, and what locks that currency once the first expense exists.
+- `expenses_pin_identity`, which stops an update moving a group expense into
+  somebody's private records.
+- `expenses_update_author_or_admin` / `..._delete_author_or_admin`, which are
+  specification section 9's edit rule stated once, in the database.
+
+Adding a migration would have meant re-proving 77 authorization assertions for
+no gain. This phase is application code only.
+
+### What was built
+
+**`src/lib/expenses/group-queries.ts`** — the reads. `listGroupExpenses`
+(paged, filtered, with the filtered total), `listRecentGroupExpenses` for the
+group page, `getGroupExpense`, and `listGroupCategories`. Every query is scoped
+to `group_id`, which is the intent and the index rather than the security
+boundary: RLS already returns a group's expenses only to its members, so a
+non-member asking gets an empty result — the same answer as a group that does
+not exist.
+
+One thing these reads *do* decide is who may edit a row, because a page has to
+know before it renders a button. `canEdit` states specification section 9's
+rule once — the member who recorded it, or an admin — and the pages ask it
+rather than restating it.
+
+**`src/lib/expenses/group-actions.ts`** — the writes, following the same
+discipline as every action before them: re-validate, re-derive the user from
+the session, treat the group id as a claim about *which* group and never about
+the right to act on one. The insert never takes `user_id` from the form (it is
+the session's user), never takes the currency from the form (it is the
+group's), and lets the database refuse everything else.
+
+**`src/lib/expenses/filters.ts`** — filters travel in the query string, so the
+list is linkable and survives a refresh, and the filter bar is a plain GET
+form that works with JavaScript off. Values are read leniently: an
+unrecognised one is dropped rather than rejected, because a stale link should
+still show a list. The ids are only shape-checked — whether one names a
+category or a member of *this* group is settled by the query itself, which is
+scoped to the group and runs under RLS, so an id from somewhere else simply
+matches nothing.
+
+**Pages** — `/groups/[id]/expenses` (list, filters, pagination),
+`/groups/[id]/expenses/new`, `/groups/[id]/expenses/[expenseId]/edit`, and the
+group page's expense panel, which replaces Phase 5's "coming next" placeholder
+with the five most recent expenses, the group's running total, and a link to
+the full list.
+
+### Reuse rather than repetition
+
+`ExpenseForm` and `ExpenseList` are now the same components for personal and
+group expenses, with the differences expressed as props rather than as a second
+copy:
+
+- **`members`** — given, the form renders a "Paid by" picker over the group's
+  members, defaulting to the signed-in user (specification section 7); omitted,
+  the expense is personal and the payer is fixed, which the database enforces
+  as well (`expenses_personal_paid_by_owner`).
+- **`canCreateCategories`** — false for a group member, so "+ Create a new
+  category" and the suggested defaults are not offered at all. Specification
+  section 14's simple MVP choice is that an admin manages a group's categories;
+  offering a control that RLS would then refuse is worse than not offering it.
+- **`ExpenseList`** takes an optional `paidByName` and a `actions` render prop,
+  so a group row says who paid and carries controls the *viewer* is allowed to
+  use, while a personal row keeps the defaults it always had.
+
+`ExpensePagination` gained `basePath` and `query`, so paging a filtered list
+does not silently drop its filters.
+
+The Phase 5 rule was observed throughout: **a Server Action is bound in the
+Server Component that renders the form**, never inside a Client Component,
+because the latter hangs forever.
+
+### Authorization, and where it actually lives
+
+Nothing in `src/` decides who may add, edit or delete a group expense. The
+pages avoid offering controls that would be refused, and the actions turn a
+refusal into a sentence; both are courtesies on top of the database's answer.
+Three places carry the real rule:
+
+| Question | Answered by |
+| --- | --- |
+| May I add an expense to this group? | `expenses_insert_owner_or_member` |
+| May I change or delete *this* expense? | `expenses_update_author_or_admin`, `expenses_delete_author_or_admin` |
+| May the person I named as payer be named? | the `expenses_check_paid_by` trigger |
+| May I add a category to this group? | `categories_insert_owner_or_admin` |
+
+A member who reaches the edit URL for somebody else's expense is told plainly
+that they cannot edit it, rather than being shown a 404 for a record they can
+legitimately see in the list — but the write is refused either way.
+
+### Testing — `scripts/verify-group-expenses.mjs`, `npm run verify:group-expenses`
+
+54 assertions across the same two surfaces Phase 5 used: the running
+application over HTTP, driving the real forms with their hidden Server Action
+fields (the no-JavaScript path, so the actions themselves run), and PostgREST
+directly with each user's own JWT, which is what somebody reaches when they
+skip the UI.
+
+Three throwaway accounts — an admin, a member and an outsider — plus a second,
+unrelated group belonging to the outsider. Coverage: the empty states; the
+paid-by picker listing every member; a member recording an expense paid by
+somebody else and every field landing correctly, including the recorder, the
+payer and **the group's currency rather than the application default**; the
+expense staying out of personal records and out of the personal editor; a
+non-member being refused as the payer, from the form and from PostgREST; group
+categories, including a member being refused the creation of one and a
+category from another group — or a personal one — being refused; the full edit
+and delete matrix for author, admin and neither; a group expense resisting an
+attempt to re-parent it into private records; outsiders seeing nothing on any
+surface; the signed-out redirect; every filter, alone, combined, empty, and
+with nonsense values; exact totals in a non-default currency; the currency lock
+now that expenses exist; server-side validation; and a departed member's
+expenses staying with the group while they can no longer add to it.
+
+**All 54 pass.** Test accounts are deleted at the end even on failure.
+
+Three of the first-run failures were the suite's own fault and are worth
+recording:
+
+1. **A member reads the *whole* membership list**, not just their own row —
+   which is correct, and RLS says so. The assertion had to name the row it
+   meant.
+2. **EUR is formatted in its own locale**: "2.450,50 €", not "€2,450.50". A
+   suite that asserts on money has to know which locale it is reading, which
+   is exactly the property being tested.
+3. A copy assertion that quoted the empty state slightly wrong.
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | ✅ Clean |
+| `npm run typecheck` | ✅ Clean |
+| `npm run build` | ✅ 19 routes; `/groups/[id]/expenses`, `/groups/[id]/expenses/new`, `/groups/[id]/expenses/[expenseId]/edit` added |
+| `npm run verify:group-expenses` | ✅ 54 passed, 0 failed |
+| `npm run verify:groups` | ✅ 71 passed, 0 failed — Phase 5 unaffected |
+| `npm run verify:expenses` | ✅ 41 passed, 0 failed — Phase 4 unaffected |
+| `npm run db:verify-rls` | ✅ 77 passed, 0 failed — Phase 3 unaffected |
+| Dev server log | ✅ No errors or warnings beyond the deliberate refusals the suite provokes |
+| Database left clean | ✅ Every test account and its data removed; only the two real accounts and their own data remain |
+
+### Decisions worth knowing
+
+- **The recorder and the payer are different people, and both are kept.**
+  `user_id` is whoever wrote the expense down and never changes hands — an
+  admin correcting somebody's entry does not become its author, which is what
+  keeps "you may edit what you recorded" meaningful. A test asserts it.
+- **A group member cannot create categories, and is not asked to.** The
+  alternative in specification section 14 — letting members suggest one — needs
+  a request-and-approve flow that would be its own feature. The control is
+  hidden, the refusal is still enforced by RLS, and the message tells a member
+  what to do instead.
+- **Filters are a GET form, not a Server Action.** The result is a URL, which
+  is shareable, bookmarkable, back-button-correct and free of JavaScript.
+- **Search and date ranges were left for Phase 9.** Phase 6's brief is "group
+  expense filtering"; Phase 9 owns the month selector, free-text search and
+  date ranges across both personal and group lists, and building half of that
+  here would mean building it twice.
+- **Totals are still summed in TypeScript, in integer minor units.** A group's
+  list is a bounded set and PostgREST exposes no aggregate by default. Phase 8
+  needs several figures at once across members and categories, and that is the
+  point at which a database-side summary earns its place — the code says so
+  where it matters.
+- **The group page shows five recent expenses, not a dashboard.** A monthly
+  summary with charts is Phase 8, and a half-built version of it here would
+  only have to be replaced.
+
+### Deliberately not done in this phase
+
+Category management screens and monthly budgets (Phase 7); the group dashboard,
+member spending and charts (Phase 8); the month selector, free-text search and
+date ranges (Phase 9); CSV export (Phase 10). A group's categories can be
+created while adding an expense but not yet renamed or archived from the UI —
+the schema and the actions already support both, and the screen for it is
+Phase 7's.
 
 ---
 

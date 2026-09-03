@@ -29,16 +29,33 @@ export type ExpenseFormDefaults = {
   expenseDate?: IsoDate;
   /** An existing category id, or "" for none. */
   category?: string;
+  /** A group member's user id. Ignored for a personal expense. */
+  paidBy?: string;
   paymentMode?: string;
   notes?: string;
 };
 
+/** Someone who can be recorded as having paid, in a group. */
+export type PayerOption = { id: string; name: string; isSelf: boolean };
+
 type ExpenseFormProps = {
   action: (state: FormState, formData: FormData) => Promise<FormState>;
-  /** The user's own categories, for the select. */
+  /** The categories available here: the user's own, or the group's. */
   categories: ExpenseCategory[];
   /** Personal expenses are always paid by their owner (specification 45). */
   payerName: string;
+  /**
+   * The group's members. Given, the form offers a "Paid by" picker
+   * (specification 7); omitted, the expense is personal and the payer is
+   * fixed, which the database enforces as well.
+   */
+  members?: PayerOption[];
+  /**
+   * Whether this user may add a category here. False for a group member, since
+   * group categories are admin-managed (specification 14) — the control is
+   * hidden rather than offered and then refused.
+   */
+  canCreateCategories?: boolean;
   currencyCode: CurrencyCode;
   /** Today as the server sees it; corrected to the browser's day on mount. */
   serverToday: IsoDate;
@@ -59,6 +76,8 @@ export function ExpenseForm({
   action,
   categories,
   payerName,
+  members,
+  canCreateCategories = true,
   currencyCode,
   serverToday,
   defaults,
@@ -101,11 +120,14 @@ export function ExpenseForm({
   const existingNames = new Set(
     categories.map((item) => item.name.trim().toLowerCase()),
   );
-  const suggestions = DEFAULT_CATEGORIES.filter(
-    (name) => !existingNames.has(name.toLowerCase()),
-  );
+  const suggestions = canCreateCategories
+    ? DEFAULT_CATEGORIES.filter((name) => !existingNames.has(name.toLowerCase()))
+    : [];
 
-  const creatingCategory = category === CATEGORY_CREATE;
+  const creatingCategory = canCreateCategories && category === CATEGORY_CREATE;
+  const categoryHint = members
+    ? "Optional. Picking a suggestion adds it to this group's categories."
+    : "Optional. Picking a suggestion adds it to your categories.";
 
   return (
     <form action={formAction} className="flex flex-col gap-5" noValidate>
@@ -151,18 +173,47 @@ export function ExpenseForm({
         </div>
       </Field>
 
-      <Field
-        name="paidBy"
-        label="Paid by"
-        hint="Personal expenses are always your own. In a group you can choose who paid."
-      >
-        <Input
-          readOnly
-          value={payerName}
-          className="cursor-default bg-muted text-muted-foreground"
-          {...fieldAria("paidBy", { hasHint: true })}
-        />
-      </Field>
+      {members ? (
+        <Field
+          name="paidBy"
+          label="Paid by"
+          errors={state.fieldErrors?.paidBy}
+          hint="Any member of this group can be recorded as having paid."
+        >
+          <Select
+            name="paidBy"
+            defaultValue={
+              state.values?.paidBy ??
+              defaults?.paidBy ??
+              (members.find((member) => member.isSelf)?.id ?? members[0]?.id)
+            }
+            {...fieldAria("paidBy", {
+              hasHint: true,
+              errors: state.fieldErrors?.paidBy,
+            })}
+            required
+          >
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.isSelf ? `${member.name} (you)` : member.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : (
+        <Field
+          name="paidBy"
+          label="Paid by"
+          hint="Personal expenses are always your own. In a group you can choose who paid."
+        >
+          <Input
+            readOnly
+            value={payerName}
+            className="cursor-default bg-muted text-muted-foreground"
+            {...fieldAria("paidBy", { hasHint: true })}
+          />
+        </Field>
+      )}
 
       <Field
         name="expenseDate"
@@ -188,7 +239,11 @@ export function ExpenseForm({
         name="category"
         label="Category"
         errors={state.fieldErrors?.category}
-        hint="Optional. Picking a suggestion adds it to your categories."
+        hint={
+          canCreateCategories
+            ? categoryHint
+            : "Optional. Only a group admin can add categories."
+        }
       >
         <Select
           name="category"
@@ -202,7 +257,7 @@ export function ExpenseForm({
           <option value={CATEGORY_NONE}>No category</option>
 
           {categories.length > 0 ? (
-            <optgroup label="Your categories">
+            <optgroup label={members ? "Group categories" : "Your categories"}>
               {categories.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
@@ -221,7 +276,9 @@ export function ExpenseForm({
             </optgroup>
           ) : null}
 
-          <option value={CATEGORY_CREATE}>+ Create a new category</option>
+          {canCreateCategories ? (
+            <option value={CATEGORY_CREATE}>+ Create a new category</option>
+          ) : null}
         </Select>
       </Field>
 

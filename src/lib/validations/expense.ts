@@ -80,41 +80,74 @@ const categoryName = z
   .min(1, "Category name is required")
   .max(60, "Category name must be 60 characters or fewer");
 
+/** Every field an expense form submits, group or personal. */
+const expenseFields = {
+  itemName,
+  amount,
+  expenseDate,
+  /** An existing category id, a `name:` selection, or the create sentinel. */
+  category: z.string().trim().max(120).default(CATEGORY_NONE),
+  /** Only read when `category` is the create sentinel. */
+  newCategoryName: z.string().trim().max(60).default(""),
+  paymentMode,
+  notes,
+};
+
+/** A new category name is only required when the form asked to create one. */
+function checkNewCategoryName(
+  value: { category: string; newCategoryName: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.category !== CATEGORY_CREATE) {
+    return;
+  }
+
+  const parsed = categoryName.safeParse(value.newCategoryName);
+
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["newCategoryName"],
+        message: issue.message,
+      });
+    }
+  }
+}
+
 export const expenseSchema = z
-  .object({
-    itemName,
-    amount,
-    expenseDate,
-    /** An existing category id, a `name:` selection, or the create sentinel. */
-    category: z.string().trim().max(120).default(CATEGORY_NONE),
-    /** Only read when `category` is the create sentinel. */
-    newCategoryName: z.string().trim().max(60).default(""),
-    paymentMode,
-    notes,
-  })
-  .superRefine((value, ctx) => {
-    if (value.category !== CATEGORY_CREATE) {
-      return;
-    }
-
-    const parsed = categoryName.safeParse(value.newCategoryName);
-
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["newCategoryName"],
-          message: issue.message,
-        });
-      }
-    }
-  })
+  .object(expenseFields)
+  .superRefine(checkNewCategoryName)
   .transform((value) => ({
     itemName: value.itemName,
     amount: value.amount,
     expenseDate: value.expenseDate,
     paymentMode: value.paymentMode,
     notes: value.notes,
+    category: resolveCategoryChoice(value.category, value.newCategoryName),
+  }));
+
+/**
+ * A group expense (specification sections 7 and 45).
+ *
+ * The one extra field is `paidBy`: in a group, any member may be recorded as
+ * having paid. Only its *shape* is checked here — whether that person is
+ * actually a member of this group is a question for the database, which
+ * answers it with a trigger on every insert and update.
+ */
+export const groupExpenseSchema = z
+  .object({
+    ...expenseFields,
+    paidBy: z.uuid("Choose who paid from the list"),
+  })
+  .superRefine(checkNewCategoryName)
+  .transform((value) => ({
+    itemName: value.itemName,
+    amount: value.amount,
+    expenseDate: value.expenseDate,
+    paymentMode: value.paymentMode,
+    notes: value.notes,
+    paidBy: value.paidBy,
     category: resolveCategoryChoice(value.category, value.newCategoryName),
   }));
 
@@ -152,3 +185,4 @@ function resolveCategoryChoice(
 }
 
 export type ExpenseInput = z.infer<typeof expenseSchema>;
+export type GroupExpenseInput = z.infer<typeof groupExpenseSchema>;

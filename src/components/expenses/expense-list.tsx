@@ -1,14 +1,14 @@
 import { Pencil } from "lucide-react";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { DeleteExpenseButton } from "@/components/expenses/delete-expense-button";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { paymentModeLabel } from "@/lib/constants";
 import { formatRelativeDate, type IsoDate } from "@/lib/dates";
-import type { PersonalExpense } from "@/lib/expenses/queries";
 import { formatCurrency, formatMinorUnits, sumAmounts } from "@/lib/money";
-import type { CurrencyCode } from "@/types";
+import type { CurrencyCode, PaymentMode } from "@/types";
 
 /**
  * The monthly expense list (specification section 22).
@@ -17,12 +17,26 @@ import type { CurrencyCode } from "@/types";
  * seven-column table is unreadable on a phone. Days are grouped under a
  * heading with that day's total, which is the question a list like this is
  * usually asked.
+ *
+ * The same component renders personal and group expenses. A group row shows
+ * who paid and carries its own actions, because who may edit it depends on the
+ * viewer (specification section 9); a personal row is always the viewer's own,
+ * so the defaults apply.
  */
 
-function groupByDate(
-  expenses: PersonalExpense[],
-): [IsoDate, PersonalExpense[]][] {
-  const groups = new Map<IsoDate, PersonalExpense[]>();
+/** The minimum an expense must carry to be listed. */
+export type ExpenseListRow = {
+  id: string;
+  item_name: string;
+  amount: number;
+  expense_date: IsoDate;
+  payment_mode: PaymentMode | null;
+  notes: string | null;
+  category: { name: string } | null;
+};
+
+function groupByDate<T extends ExpenseListRow>(expenses: T[]): [IsoDate, T[]][] {
+  const groups = new Map<IsoDate, T[]>();
 
   // Input is already ordered by date descending, so insertion order is correct.
   for (const expense of expenses) {
@@ -41,9 +55,13 @@ function groupByDate(
 function ExpenseRow({
   expense,
   currencyCode,
+  paidByName,
+  actions,
 }: {
-  expense: PersonalExpense;
+  expense: ExpenseListRow;
   currencyCode: CurrencyCode;
+  paidByName?: string | null;
+  actions: ReactNode;
 }) {
   const payment = paymentModeLabel(expense.payment_mode);
 
@@ -60,6 +78,12 @@ function ExpenseRow({
         </div>
 
         <p className="mt-1 text-xs text-muted-foreground">
+          {paidByName !== undefined ? (
+            <>
+              <span>Paid by {paidByName ?? "a former member"}</span>
+              <span aria-hidden> · </span>
+            </>
+          ) : null}
           {payment ? <span>{payment}</span> : <span>Payment not recorded</span>}
           {expense.notes ? (
             <>
@@ -75,28 +99,41 @@ function ExpenseRow({
           {formatCurrency(expense.amount, currencyCode)}
         </span>
 
-        <div className="flex items-center gap-1">
-          <Link
-            href={`/expenses/${expense.id}/edit`}
-            aria-label={`Edit ${expense.item_name}`}
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            <Pencil aria-hidden />
-            <span className="sr-only sm:not-sr-only">Edit</span>
-          </Link>
-          <DeleteExpenseButton id={expense.id} itemName={expense.item_name} />
-        </div>
+        <div className="flex items-center gap-1">{actions}</div>
       </div>
     </li>
   );
 }
 
-export function ExpenseList({
+/** Edit and delete for a personal expense — always the viewer's own. */
+function personalActions(expense: ExpenseListRow): ReactNode {
+  return (
+    <>
+      <Link
+        href={`/expenses/${expense.id}/edit`}
+        aria-label={`Edit ${expense.item_name}`}
+        className={buttonVariants({ variant: "ghost", size: "sm" })}
+      >
+        <Pencil aria-hidden />
+        <span className="sr-only sm:not-sr-only">Edit</span>
+      </Link>
+      <DeleteExpenseButton id={expense.id} itemName={expense.item_name} />
+    </>
+  );
+}
+
+export function ExpenseList<T extends ExpenseListRow>({
   expenses,
   currencyCode,
+  paidByName,
+  actions = personalActions,
 }: {
-  expenses: PersonalExpense[];
+  expenses: T[];
   currencyCode: CurrencyCode;
+  /** Given, each row states who paid (group expenses only). */
+  paidByName?: (expense: T) => string | null;
+  /** The controls for one row, so authorization is the caller's to decide. */
+  actions?: (expense: T) => ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -123,6 +160,8 @@ export function ExpenseList({
                 key={expense.id}
                 expense={expense}
                 currencyCode={currencyCode}
+                paidByName={paidByName ? paidByName(expense) : undefined}
+                actions={actions(expense)}
               />
             ))}
           </ul>
