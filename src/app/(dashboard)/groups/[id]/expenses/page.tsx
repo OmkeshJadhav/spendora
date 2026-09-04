@@ -3,6 +3,7 @@ import { Plus, ReceiptText, SearchX } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { AddExpenseFab } from "@/components/expenses/add-expense-fab";
 import { ExpenseFilterBar } from "@/components/expenses/expense-filters";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { ExpensePagination } from "@/components/expenses/expense-pagination";
@@ -100,7 +101,12 @@ export default async function GroupExpensesPage(
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Expenses</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          {/* Same `data-slot` the page headers carry: this is the list's
+              summary line, and the suites match it by role, not by class. */}
+          <p
+            data-slot="page-description"
+            className="mt-1 text-sm text-muted-foreground"
+          >
             {filtered
               ? `${total} matching ${total === 1 ? "expense" : "expenses"}, totalling ${formatMinorUnits(filteredTotal, group.currency_code)}.`
               : `${total} ${total === 1 ? "expense" : "expenses"}, totalling ${formatMinorUnits(filteredTotal, group.currency_code)}.`}
@@ -109,7 +115,7 @@ export default async function GroupExpensesPage(
 
         <Link
           href={`/groups/${group.id}/expenses/new`}
-          className={buttonVariants({ size: "md" })}
+          className={`${buttonVariants({ size: "md" })} hidden sm:inline-flex`}
         >
           <Plus aria-hidden />
           Add expense
@@ -195,6 +201,8 @@ export default async function GroupExpensesPage(
           />
         </>
       )}
+
+      <AddExpenseFab href={`/groups/${group.id}/expenses/new`} />
     </FadeIn>
   );
 }

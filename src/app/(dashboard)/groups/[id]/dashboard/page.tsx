@@ -166,7 +166,7 @@ export default async function GroupDashboardPage(
           <Card>
             <CardHeader className="flex-row items-center justify-between">
               <div>
-                <CardTitle className="flex items-center gap-2 text-base text-foreground">
+                <CardTitle className="flex items-center gap-2">
                   <ReceiptText
                     aria-hidden
                     className="size-4 text-muted-foreground"
@@ -189,6 +189,7 @@ export default async function GroupDashboardPage(
                 expenses={dashboard.recent}
                 currencyCode={group.currency_code}
                 paidByName={(expense) => expense.paidByName}
+                headingLevel="h3"
                 actions={(expense) => (
                   <GroupExpenseActions
                     groupId={group.id}

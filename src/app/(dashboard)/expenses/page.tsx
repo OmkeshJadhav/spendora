@@ -13,6 +13,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth/dal";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
 import { formatMonthLabel } from "@/lib/dates";
@@ -75,24 +76,23 @@ export default async function ExpensesPage(props: PageProps<"/expenses">) {
     <FadeIn className="flex flex-col gap-6">
       <FlashToast flash={flash} path={BASE_PATH} />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Expenses</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {filtered
-              ? `${total} matching ${total === 1 ? "expense" : "expenses"}, totalling ${formatMinorUnits(filteredTotal, DEFAULT_CURRENCY_CODE)}.`
-              : "Your personal expenses. Only you can see them."}
-          </p>
-        </div>
-
-        <Link
-          href="/expenses/new"
-          className={`${buttonVariants({ size: "md" })} hidden sm:inline-flex`}
-        >
-          <Plus aria-hidden />
-          Add expense
-        </Link>
-      </div>
+      <PageHeader
+        title="Expenses"
+        description={
+          filtered
+            ? `${total} matching ${total === 1 ? "expense" : "expenses"}, totalling ${formatMinorUnits(filteredTotal, DEFAULT_CURRENCY_CODE)}.`
+            : "Your personal expenses. Only you can see them."
+        }
+        action={
+          <Link
+            href="/expenses/new"
+            className={`${buttonVariants({ size: "md" })} hidden sm:inline-flex`}
+          >
+            <Plus aria-hidden />
+            Add expense
+          </Link>
+        }
+      />
 
       {/* The controls are only worth the space once there is something to
           narrow — but they stay put while a filter is active, otherwise

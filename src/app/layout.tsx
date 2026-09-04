@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { Toaster } from "@/components/ui/toaster";
@@ -14,6 +14,22 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+/**
+ * `viewportFit: "cover"` lets the page reach under the iOS home indicator,
+ * which is what makes `env(safe-area-inset-bottom)` — and so the bottom
+ * navigation bar's `pb-safe` — resolve to anything other than zero.
+ *
+ * The theme colour matches the header's surface in each scheme, so the browser
+ * chrome above the page does not sit at a different shade to it.
+ */
+export const viewport: Viewport = {
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "oklch(1 0 0)" },
+    { media: "(prefers-color-scheme: dark)", color: "oklch(0.21 0.014 258)" },
+  ],
+};
 
 export const metadata: Metadata = {
   title: {

@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireProfile } from "@/lib/auth/dal";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
 import { formatTimestamp, todayIso } from "@/lib/dates";
@@ -41,12 +42,10 @@ export default async function EditExpensePage(
 
   return (
     <FadeIn className="mx-auto flex w-full max-w-xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Edit expense</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Recorded on {formatTimestamp(expense.created_at)}.
-        </p>
-      </div>
+      <PageHeader
+        title="Edit expense"
+        description={`Recorded on ${formatTimestamp(expense.created_at)}.`}
+      />
 
       <Card>
         <CardHeader>

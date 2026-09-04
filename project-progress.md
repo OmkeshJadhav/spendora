@@ -15,7 +15,7 @@ Tracks what has actually been built, phase by phase, against
 | 8     | Dashboards                     | ✅ Complete    |
 | 9     | Search, filters + history      | ✅ Complete    |
 | 10    | Export                         | ✅ Complete    |
-| 11    | UI polish                      | ⬜ Not started |
+| 11    | UI polish                      | ✅ Complete    |
 | 12    | Testing + security audit       | ⬜ Not started |
 | 13    | Production readiness           | ⬜ Not started |
 
@@ -2459,6 +2459,251 @@ retention: a file is built per request and never stored. Nothing about an
 expense that §25 does not list was added to the columns, including the internal
 ids — a person opening this file wants their spending, not the database's
 primary keys.
+
+---
+
+## Phase 11 — UI polish (complete, 4 September 2026)
+
+Specification §61's Phase 11 list: colours, typography, spacing, cards, charts,
+animations, mobile navigation, loading, empty, error and accessibility states —
+under its own closing instruction, *"do not redesign the entire application
+unnecessarily."*
+
+That instruction shaped the phase more than the list did. Ten phases of work
+had already built the design tokens, the empty states, the skeletons and the
+`prefers-reduced-motion` handling, so this was not a repaint. It was an audit:
+find where the existing system is actually wrong or missing, fix that, and
+leave everything else alone. Nine of the eleven items needed a change; two —
+empty states and animations — were examined and found already correct, and
+saying so is part of the result.
+
+### No migration was needed
+
+This phase changed presentation only. No column, index, constraint or policy
+moved, and `supabase/migrations/` is untouched. `db:verify-rls` was re-run
+anyway and passed 77/77.
+
+### The one real defect: status colours failed WCAG AA
+
+The most valuable finding was not a matter of taste. The semantic colour tokens
+were measured against the surfaces they actually sit on, and in light mode the
+status colours failed as text:
+
+| Token | On card | On page | On muted | AA needs |
+| ----- | ------- | ------- | -------- | -------- |
+| `warning` | 2.53:1 | 2.43:1 | 2.29:1 | 4.5:1 |
+| `success` | 3.73:1 | 3.58:1 | 3.37:1 | 4.5:1 |
+| `danger` | 4.71:1 | 4.51:1 | 4.26:1 | 4.5:1 |
+
+`warning` was less than half the required ratio. This is exactly what §40 means
+by "sufficient contrast", and it was reaching users through `Badge` — the
+component that carries every budget status word ("Healthy", "Warning",
+"Exceeded"), which is precisely the text §16 says must not depend on colour.
+
+The fix separates two jobs that had been sharing one value. A fill and a
+letterform are not held to the same standard — a meter bar is a graphical
+object at 3:1, a status word is text at 4.5:1 — so the tokens split:
+
+- `--success-strong`, `--warning-strong`, `--danger-strong` are darker steps of
+  the same hues, for text and icons.
+- `--success`, `--warning`, `--danger` keep their existing values, for meter
+  bars, chip backgrounds and borders.
+
+In dark mode the strong tokens alias the originals, which already measured
+4.75:1 or better against every dark surface. Measured after the change:
+
+| Token | On card | On page | On muted |
+| ----- | ------- | ------- | -------- |
+| `success-strong` `#0b7643` | 5.70:1 | 5.46:1 | 5.18:1 |
+| `warning-strong` `#976213` | 5.16:1 | 4.94:1 | 4.69:1 |
+| `danger-strong` `#be222a` | 6.08:1 | 5.83:1 | 5.54:1 |
+
+All eleven places that used a status colour as text were moved across: the
+three `Badge` variants, form field errors, category row errors, the budget
+table's negative remaining, `BudgetFigures`, both sign-in banners, the
+accept-invitation error and the sign-up confirmation icon. The meters, tints
+and borders were left exactly as they were.
+
+### Mobile navigation was the shrunken sidebar §34 warns against
+
+The header rendered `MainNav` twice — once inline for wide screens, and once
+again as a second row below it on narrow ones. Four labelled links with icons
+need roughly 440px of row; a 360px phone does not have it. It also consumed
+header height on every page and scrolled away with it, so changing section
+meant scrolling back to the top.
+
+Replaced with a real bottom bar (`src/components/mobile-nav.tsx`): fixed,
+label under icon, a 56px touch target against the 44px minimum, and
+`env(safe-area-inset-bottom)` so it clears the iOS home indicator. The current
+section is marked by a bar at the top of the tab as well as by colour, so it
+does not depend on telling two hues apart.
+
+Both presentations now read one list, `src/components/nav-links.ts`, so the
+desktop row and the mobile bar cannot drift apart and adding Reports or
+Settings later is a one-line change.
+
+Three consequences were handled rather than left:
+
+- `DashboardLayout` reserves `pb-24` on small screens, because the bar is out
+  of the document flow and would otherwise sit over the last row of a page.
+- The add-expense FAB moved to `bottom-20` with `mb-safe`, so it sits above the
+  bar instead of on top of it.
+- The root layout declares `viewportFit: "cover"`, without which
+  `env(safe-area-inset-bottom)` resolves to zero and the safe-area padding
+  would have been decorative.
+
+The header also became `sticky`, which it can afford now that it is one row
+tall, and gained a matching `themeColor` per scheme.
+
+### Heading structure had gaps a screen reader would fall into
+
+`CardTitle` rendered `h3` styled as muted 14px body text — which is why twenty
+of its twenty-four usages overrode it with `className="text-base
+text-foreground"`. When a component's default is wrong nearly every time it is
+used, the default is the bug.
+
+It now renders `h2` at `text-base font-medium text-foreground` and takes an
+`as` prop for the exceptions. All twenty overrides were deleted. Two real
+structural faults fell out of this:
+
+- **The auth pages had no `h1` at all.** "Sign in to your account" was an `h3`
+  and was the page's only heading. Both now pass `as="h1"`.
+- **Card titles skipped from `h1` to `h3`.** Now `h1` → `h2` with nothing
+  missing between them.
+
+`ExpenseList`'s day headings gained a `headingLevel` prop for the same reason.
+They are `h2` when the list is the page's own content, and the three places
+that render a list inside a titled card — the personal dashboard's "Recent
+expenses" and both group equivalents — pass `h3`, so the outline stays ordered
+rather than inverted.
+
+A skip link was added ahead of the header, and the main region of both layouts
+is now a `<main>` landmark rather than a `<div>`.
+
+### Typography and spacing: one rhythm, not ten
+
+Nine pages had each grown their own copy of the same title block, which is how
+a heading ends up a step larger on one page than another. `PageHeader` replaces
+all nine: one type scale, one gap, one `h1` per page.
+
+Container padding went to `px-4 sm:px-6` — 24px of side padding on a 360px
+screen is 13% of it — and headings got `text-wrap: balance` so a two-line title
+breaks evenly.
+
+### Charts gained a scale to read against
+
+`ColumnChart` drew columns with no reference, so a height could only be
+compared to its neighbours. Two dashed lines now sit behind the columns at the
+top of the scale and its midpoint, with the maximum printed once on the top
+line.
+
+That made the per-column maximum label redundant, so it was removed: only the
+month in view is labelled now. The alternative was two labels showing the same
+number in nearly the same place whenever the tallest column was also the
+rightmost. Both lines are `aria-hidden` — every column already carries its
+month and exact amount as visually hidden text, and the figcaption names the
+scale in words.
+
+### Every route now has a loading state, and failures keep their shell
+
+Seven routes fell through to the generic root skeleton: both expense forms,
+both group expense forms, new group, settings and group settings. They share
+`FormPageSkeleton`, whose shape roughly matches what arrives, which is what
+stops the layout jumping when it does. All seventeen dashboard routes now have
+a `loading.tsx`.
+
+`(dashboard)/error.tsx` and `(dashboard)/not-found.tsx` were added. Both
+previously bubbled to the root boundary, which replaces the whole page — a user
+whose dashboard failed landed on a bare page whose only way out was the back
+button. Nested inside the layout, a failure now keeps the header and the
+navigation. The 404 wording avoids confirming whether the thing exists, because
+RLS makes "missing" and "not yours" indistinguishable on purpose (§32).
+
+### Examined and deliberately left alone
+
+- **Empty states.** Every list, chart, table and filtered result already had
+  one, with an icon, a title, a sentence and an action where one applies. §26 is
+  met; adding to it would have been redesign for its own sake.
+- **Animations.** `FadeIn` already collapses to a plain fade under
+  `prefers-reduced-motion`, the global reduce-motion rule already neutralises
+  every transition, and the group list already staggers. §39's "quick and
+  subtle" and §33's "avoid excessive animations" both argue for stopping here.
+  Animating expense rows on every navigation was considered and rejected as
+  over-animation on a data-dense page.
+- **`BarList`.** One series, one hue, amounts and shares printed as text. The
+  existing reasoning holds and nothing was changed.
+
+### Checks
+
+| Command | Result |
+| ------- | ------ |
+| `npm run lint` | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | succeeds, 24 routes |
+| `npm run verify:search` | 50 passed, 0 failed |
+| `npm run verify:export` | 52 passed, 0 failed |
+| `npm run verify:expenses` | 41 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+| `npm run verify:dashboards` | 51 passed, 0 failed |
+| `npm run verify:budgets` | 57 passed, 0 failed |
+| `npm run verify:groups` | 71 passed, 0 failed |
+| `npm run db:verify-rls` | 77 passed, 0 failed |
+
+453 checks across the eight suites, none failing. The compiled stylesheet was
+also inspected directly to confirm the new tokens and utilities emit, rather
+than assuming a class name that is only referenced in JSX produces CSS.
+
+### One test was style-coupled, and was fixed rather than worked around
+
+`verify-search.mjs` located the "N matching expenses, totalling X" line by
+matching its exact class attribute, `<p class="mt-1 text-sm
+text-muted-foreground">`. `PageHeader` restyled that line, and the selector
+stopped matching — twelve assertions failed on a summary that was present and
+correct.
+
+The assertion is about the summary's *content*: its callers check the count and
+the formatted total. It now matches a stable `data-slot="page-description"`
+hook instead of the class list. Nothing about what is asserted changed, no
+assertion was removed, and all fifty checks still run. A test that fails when a
+line is restyled is testing the wrong thing, and loosening the selector is the
+fix rather than the workaround — reverting the styling to satisfy it would have
+been.
+
+### Decisions worth knowing
+
+- **Fills and text are different jobs.** One token could not serve a meter bar
+  at 3:1 and a status word at 4.5:1. Splitting them fixed the contrast failure
+  without dulling the meters that make budgets scannable.
+- **Contrast was measured, not eyeballed.** Every ratio in this section came
+  from computing relative luminance against the actual surfaces, before and
+  after.
+- **When a default is overridden nearly every time, the default is wrong.**
+  `CardTitle` proved it twenty times over, and fixing it surfaced two heading
+  faults that the overrides had been hiding.
+- **A bottom bar, not a shrunken row.** §34 asks for a real mobile pattern, and
+  the second nav row was the thing it warns against.
+- **Reserve space for anything fixed.** The bar, the FAB and the safe area were
+  handled together, because a floating element that covers content is worse
+  than no floating element.
+- **Two of eleven items needed nothing.** Empty states and animations were
+  audited against §26 and §39 and left alone. "Do not redesign unnecessarily"
+  is an instruction to be able to stop.
+
+### Deliberately not done in this phase
+
+No new UI library, no icon set change, no theme switcher, and no dark-mode
+toggle — the scheme still follows the OS, which is what the tokens were built
+for. No page-transition animation between routes: it costs a perceptible delay
+on every navigation in exchange for decoration, and §33 lists excessive
+animation among the things to avoid.
+
+No changes to any query, action, validation schema or policy. Phase 11 is
+presentation, and a phase that quietly altered behaviour would make its own
+verification meaningless.
+
+Phase 12's deliberate unauthorized-access testing is untouched. The suites this
+phase re-ran are the existing ones; none were added, because no behaviour was
+added.
 
 ---
 

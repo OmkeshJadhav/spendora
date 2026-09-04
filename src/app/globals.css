@@ -34,6 +34,19 @@
   --danger: oklch(0.58 0.19 25);
   --danger-foreground: oklch(0.99 0 0);
 
+  /*
+   * Text-weight status colours.
+   *
+   * The fills above are chosen to read as a bar or a chip against a light
+   * page; as *text* on that same page they land at 3.7:1 (success) and 2.5:1
+   * (warning), under the 4.5:1 WCAG AA needs. These darker steps of the same
+   * hues clear it — so a status word is legible while the meter beside it
+   * keeps the colour that makes it scannable.
+   */
+  --success-strong: oklch(0.5 0.12 155);
+  --warning-strong: oklch(0.54 0.11 70);
+  --danger-strong: oklch(0.52 0.19 25);
+
   --radius: 0.75rem;
 }
 
@@ -66,6 +79,11 @@
 
     --danger: oklch(0.66 0.17 25);
     --danger-foreground: oklch(0.18 0.02 25);
+
+    /* On a dark surface the fills are already 4.7:1 or better as text. */
+    --success-strong: var(--success);
+    --warning-strong: var(--warning);
+    --danger-strong: var(--danger);
   }
 }
 
@@ -89,6 +107,9 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
+  --color-success-strong: var(--success-strong);
+  --color-warning-strong: var(--warning-strong);
+  --color-danger-strong: var(--danger-strong);
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 0.25rem);
@@ -111,6 +132,30 @@
   /* Financial figures line up in columns. */
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * Headings share one rhythm rather than each page picking its own, so a
+   * title reads the same weight whichever screen it is on.
+   */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}
+
+@layer utilities {
+  /*
+   * Clears the home indicator on iOS, so the bottom navigation bar is not
+   * half-covered by the system gesture area. Zero everywhere else.
+   */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .mb-safe {
+    margin-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 

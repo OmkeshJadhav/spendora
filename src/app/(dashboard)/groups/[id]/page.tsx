@@ -75,7 +75,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base text-foreground">
+          <CardTitle className="flex items-center gap-2">
             <Users aria-hidden className="size-4 text-muted-foreground" />
             Members
           </CardTitle>
@@ -97,7 +97,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
       {isAdmin ? (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base text-foreground">
+            <CardTitle className="flex items-center gap-2">
               <MailPlus aria-hidden className="size-4 text-muted-foreground" />
               Invite people
             </CardTitle>
@@ -128,7 +128,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
       <Card>
         <CardHeader className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle className="flex items-center gap-2 text-base text-foreground">
+            <CardTitle className="flex items-center gap-2">
               <ReceiptText aria-hidden className="size-4 text-muted-foreground" />
               Expenses
             </CardTitle>
@@ -161,6 +161,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
                 expenses={recentExpenses}
                 currencyCode={group.currency_code}
                 paidByName={(expense) => expense.paidByName}
+                headingLevel="h3"
                 actions={(expense) => (
                   <GroupExpenseActions
                     groupId={group.id}

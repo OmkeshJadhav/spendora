@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { CategoryBudgets } from "@/components/categories/category-budgets";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth/dal";
 import { getBudgetOverview } from "@/lib/budgets/queries";
 import type { CategoryOwner } from "@/lib/categories/owner";
@@ -25,15 +26,10 @@ export default async function CategoriesPage(props: PageProps<"/categories">) {
 
   return (
     <FadeIn className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Categories &amp; budgets
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Your personal categories, and how {formatMonthLabel(month)} is going
-          against their monthly budgets.
-        </p>
-      </div>
+      <PageHeader
+        title="Categories & budgets"
+        description={`Your personal categories, and how ${formatMonthLabel(month)} is going against their monthly budgets.`}
+      />
 
       <CategoryBudgets
         owner={owner}

@@ -60,7 +60,7 @@ export function BudgetTable({
     <Card>
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <CardTitle className="flex items-center gap-2 text-base text-foreground">
+          <CardTitle className="flex items-center gap-2">
             <Target aria-hidden className="size-4 text-muted-foreground" />
             Budget vs actual
           </CardTitle>
@@ -145,7 +145,7 @@ export function BudgetTable({
                       <td
                         className={cn(
                           "tabular py-3 pr-4 text-right",
-                          over && "font-medium text-danger",
+                          over && "font-medium text-danger-strong",
                         )}
                       >
                         {progress.remaining === null

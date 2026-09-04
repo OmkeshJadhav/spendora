@@ -21,15 +21,13 @@ export default async function SignInPage({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base text-foreground">
-          Sign in to your account
-        </CardTitle>
+        <CardTitle as="h1">Sign in to your account</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {linkError ? (
           <p
             role="alert"
-            className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+            className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger-strong"
           >
             That link is invalid or has expired. Please sign in, or request a new
             link.
@@ -38,7 +36,7 @@ export default async function SignInPage({
         {unconfirmed ? (
           <p
             role="alert"
-            className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+            className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-strong"
           >
             Your email address has not been confirmed yet. Follow the link we
             sent you, then sign in.

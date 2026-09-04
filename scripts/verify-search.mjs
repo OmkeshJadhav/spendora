@@ -415,9 +415,17 @@ function assertRows(html, expected, what) {
   );
 }
 
-/** The "N matching expenses, totalling X." line above the list. */
+/**
+ * The "N matching expenses, totalling X." line above the list.
+ *
+ * Matched by `data-slot`, not by the class list: this assertion is about the
+ * summary being present and correct, and it should not fail because the line
+ * was restyled.
+ */
 function summary(html) {
-  const match = html.match(/<p class="mt-1 text-sm text-muted-foreground">([^<]*)<\/p>/);
+  const match = html.match(
+    /<p [^>]*data-slot="page-description"[^>]*>([^<]*)<\/p>/,
+  );
   assert(match, "no summary line above the list");
   return decodeEntities(match[1]);
 }

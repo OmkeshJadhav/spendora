@@ -127,6 +127,7 @@ export function ExpenseList<T extends ExpenseListRow>({
   currencyCode,
   paidByName,
   actions = personalActions,
+  headingLevel: DayHeading = "h2",
 }: {
   expenses: T[];
   currencyCode: CurrencyCode;
@@ -134,18 +135,24 @@ export function ExpenseList<T extends ExpenseListRow>({
   paidByName?: (expense: T) => string | null;
   /** The controls for one row, so authorization is the caller's to decide. */
   actions?: (expense: T) => ReactNode;
+  /**
+   * The level for the day headings. `h2` suits a list that is the page's own
+   * content; a list inside a titled card passes `h3`, so the outline a screen
+   * reader builds stays in order.
+   */
+  headingLevel?: "h2" | "h3";
 }) {
   return (
     <div className="flex flex-col gap-6">
       {groupByDate(expenses).map(([date, items]) => (
         <section key={date} aria-labelledby={`day-${date}`}>
           <div className="mb-2 flex items-baseline justify-between gap-4 px-1">
-            <h2
+            <DayHeading
               id={`day-${date}`}
               className="text-sm font-medium text-muted-foreground"
             >
               {formatRelativeDate(date)}
-            </h2>
+            </DayHeading>
             <span className="tabular text-xs text-muted-foreground">
               {formatMinorUnits(
                 sumAmounts(items.map((item) => item.amount)),

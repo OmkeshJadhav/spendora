@@ -65,7 +65,7 @@ function Field({ name, label, errors, hint, children, className }: FieldProps) {
         <p
           id={`${name}-error`}
           role="alert"
-          className="text-xs font-medium text-danger"
+          className="text-xs font-medium text-danger-strong"
         >
           {errors?.join(" ")}
         </p>

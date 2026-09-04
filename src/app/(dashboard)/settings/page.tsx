@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireProfile } from "@/lib/auth/dal";
 
 export const metadata: Metadata = {
@@ -21,16 +22,14 @@ export default async function SettingsPage() {
 
   return (
     <FadeIn className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Manage your profile and account.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Manage your profile and account."
+      />
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base text-foreground">Profile</CardTitle>
+          <CardTitle>Profile</CardTitle>
           <CardDescription>
             Signed in as <span className="text-foreground">{profile.email}</span>
             . Your email address cannot be changed here yet.
@@ -43,7 +42,7 @@ export default async function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base text-foreground">Account</CardTitle>
+          <CardTitle>Account</CardTitle>
           <CardDescription>
             Signing out ends this session on this device.
           </CardDescription>

@@ -20,9 +20,7 @@ export default async function SignUpPage({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base text-foreground">
-          Create your account
-        </CardTitle>
+        <CardTitle as="h1">Create your account</CardTitle>
       </CardHeader>
       <CardContent>
         <SignUpForm next={next === "/dashboard" ? undefined : next} />

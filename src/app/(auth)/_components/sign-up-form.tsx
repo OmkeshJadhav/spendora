@@ -31,7 +31,7 @@ export function SignUpForm({ next }: { next?: string }) {
   if (state.status === "success") {
     return (
       <div className="flex flex-col items-center gap-3 py-4 text-center">
-        <MailCheck className="size-8 text-success" aria-hidden />
+        <MailCheck className="size-8 text-success-strong" aria-hidden />
         <h2 className="text-base font-medium">Check your inbox</h2>
         <p className="text-sm text-muted-foreground">{state.message}</p>
         <p className="text-sm text-muted-foreground">

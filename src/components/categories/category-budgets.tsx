@@ -128,9 +128,7 @@ export function CategoryBudgets({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base text-foreground">
-            Categories and budgets
-          </CardTitle>
+          <CardTitle>Categories and budgets</CardTitle>
           <CardDescription>
             Budgets are monthly and carry over to every month until you change
             them. Spending shown is for {monthLabel}. {manageHint}
@@ -188,9 +186,7 @@ export function CategoryBudgets({
       {canManage ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base text-foreground">
-              Add a category
-            </CardTitle>
+            <CardTitle>Add a category</CardTitle>
             <CardDescription>
               Categories group spending and are what budgets are set against.
             </CardDescription>

@@ -226,7 +226,7 @@ function BudgetForm({
         <p
           id={`${inputId}-error`}
           role="alert"
-          className="text-xs font-medium text-danger"
+          className="text-xs font-medium text-danger-strong"
         >
           {errors.join(" ")}
         </p>
@@ -302,7 +302,7 @@ function RenameForm({
           <p
             id={`${inputId}-error`}
             role="alert"
-            className="text-xs font-medium text-danger"
+            className="text-xs font-medium text-danger-strong"
           >
             {errors.join(" ")}
           </p>

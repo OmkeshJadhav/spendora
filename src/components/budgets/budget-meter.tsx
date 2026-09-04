@@ -106,7 +106,7 @@ export function BudgetFigures({
       <span aria-hidden> · </span>
       <span className="tabular">{progress.used}% used</span>
       <span aria-hidden> · </span>
-      <span className={cn("tabular", over && "font-medium text-danger")}>
+      <span className={cn("tabular", over && "font-medium text-danger-strong")}>
         {formatMinorUnits(Math.abs(progress.remaining ?? 0), currencyCode)}{" "}
         {over ? "over" : "left"}
       </span>

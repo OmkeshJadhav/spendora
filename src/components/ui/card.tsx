@@ -20,10 +20,22 @@ function CardHeader({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-function CardTitle({ className, ...props }: ComponentProps<"h3">) {
+/**
+ * A card's heading.
+ *
+ * Renders `h2` by default, which is the level a card sits at under a page's
+ * single `h1` — so the outline a screen reader builds has no gaps in it. Pass
+ * `as` where the nesting says otherwise: `h1` on the sign-in card, which *is*
+ * its page's heading, or `h3` for a card inside another titled section.
+ */
+function CardTitle({
+  className,
+  as: Heading = "h2",
+  ...props
+}: ComponentProps<"h2"> & { as?: "h1" | "h2" | "h3" }) {
   return (
-    <h3
-      className={cn("text-sm font-medium text-muted-foreground", className)}
+    <Heading
+      className={cn("text-base font-medium text-foreground", className)}
       {...props}
     />
   );

@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireProfile } from "@/lib/auth/dal";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
 import { getPersonalDashboard } from "@/lib/dashboard/queries";
@@ -61,25 +62,20 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
 
   return (
     <FadeIn className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Welcome, {profile.name}
-          </h1>
-          {/* The month in view is stated up front (specification section 58). */}
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your personal spending for {monthLabel}.
-          </p>
-        </div>
-
-        <Link
-          href="/expenses/new"
-          className={`${buttonVariants({ size: "md" })} hidden sm:inline-flex`}
-        >
-          <Plus aria-hidden />
-          Add expense
-        </Link>
-      </div>
+      {/* The month in view is stated up front (specification section 58). */}
+      <PageHeader
+        title={`Welcome, ${profile.name}`}
+        description={`Your personal spending for ${monthLabel}.`}
+        action={
+          <Link
+            href="/expenses/new"
+            className={`${buttonVariants({ size: "md" })} hidden sm:inline-flex`}
+          >
+            <Plus aria-hidden />
+            Add expense
+          </Link>
+        }
+      />
 
       {/* The month reaches the expense list too, so "historical records"
           (specification section 23) is one link rather than a second search. */}
@@ -134,7 +130,7 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
             <Card>
               <CardHeader className="flex-row items-center justify-between">
                 <div>
-                  <CardTitle className="flex items-center gap-2 text-base text-foreground">
+                  <CardTitle className="flex items-center gap-2">
                     <ReceiptText
                       aria-hidden
                       className="size-4 text-muted-foreground"
@@ -156,6 +152,7 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
                 <ExpenseList
                   expenses={dashboard.recent}
                   currencyCode={DEFAULT_CURRENCY_CODE}
+                  headingLevel="h3"
                 />
               </CardContent>
             </Card>

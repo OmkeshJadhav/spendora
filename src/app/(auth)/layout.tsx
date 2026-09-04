@@ -5,7 +5,7 @@ import { APP_NAME } from "@/lib/constants";
 
 export default function AuthLayout({ children }: LayoutProps<"/">) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
+    <main className="flex flex-1 flex-col items-center justify-center px-4 py-12 sm:px-6">
       <div className="w-full max-w-sm">
         <Link
           href="/"
@@ -16,6 +16,6 @@ export default function AuthLayout({ children }: LayoutProps<"/">) {
         </Link>
         {children}
       </div>
-    </div>
+    </main>
   );
 }

@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/lib/auth/dal";
 import { listMyGroups } from "@/lib/groups/queries";
 
@@ -29,19 +30,16 @@ export default async function GroupsPage(props: PageProps<"/groups">) {
     <FadeIn className="flex flex-col gap-6">
       <FlashToast flash={flash} path="/groups" />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Groups</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Shared expenses. Everyone in a group can see its records.
-          </p>
-        </div>
-
-        <Link href="/groups/new" className={buttonVariants({ size: "md" })}>
-          <Plus aria-hidden />
-          Create group
-        </Link>
-      </div>
+      <PageHeader
+        title="Groups"
+        description="Shared expenses. Everyone in a group can see its records."
+        action={
+          <Link href="/groups/new" className={buttonVariants({ size: "md" })}>
+            <Plus aria-hidden />
+            Create group
+          </Link>
+        }
+      />
 
       {groups.length === 0 ? (
         <Card>

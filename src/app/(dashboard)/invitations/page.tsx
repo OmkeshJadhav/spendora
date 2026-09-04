@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FadeIn } from "@/components/ui/fade-in";
+import { PageHeader } from "@/components/ui/page-header";
 import { requireProfile } from "@/lib/auth/dal";
 import { listMyInvitations } from "@/lib/groups/queries";
 
@@ -28,13 +29,16 @@ export default async function InvitationsPage(props: PageProps<"/invitations">) 
     <FadeIn className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <FlashToast flash={flash} path="/invitations" />
 
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Invitations</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Groups you&rsquo;ve been invited to join, addressed to {profile.email}.
-          Nothing in a group is visible to you until you accept.
-        </p>
-      </div>
+      <PageHeader
+        title="Invitations"
+        description={
+          <>
+            Groups you&rsquo;ve been invited to join, addressed to{" "}
+            {profile.email}. Nothing in a group is visible to you until you
+            accept.
+          </>
+        }
+      />
 
       {invitations.length === 0 ? (
         <Card>

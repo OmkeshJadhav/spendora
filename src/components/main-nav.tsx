@@ -1,38 +1,24 @@
 "use client";
 
-import { LayoutDashboard, ReceiptText, Tags, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ComponentType } from "react";
 
+import { isActive, NAV_LINKS } from "@/components/nav-links";
 import { cn } from "@/lib/utils";
 
 /**
- * Primary navigation (specification section 35).
+ * Primary navigation for wide screens (specification section 35).
  *
- * Reports and Settings join this list as their phases land. With a handful of
- * destinations a single row works on every screen, so there is no separate
- * mobile menu to keep in step.
+ * Narrow screens get `MobileNav` instead — a bottom bar, not this row shrunk
+ * down (section 34). Both read the same `NAV_LINKS`.
  */
-const LINKS: {
-  href: "/dashboard" | "/expenses" | "/categories" | "/groups";
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-}[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/expenses", label: "Expenses", icon: ReceiptText },
-  { href: "/categories", label: "Categories", icon: Tags },
-  { href: "/groups", label: "Groups", icon: Users },
-];
-
 export function MainNav({ className }: { className?: string }) {
   const pathname = usePathname();
 
   return (
-    <nav className={cn("flex items-center gap-1", className)}>
-      {LINKS.map((link) => {
-        const active =
-          pathname === link.href || pathname.startsWith(`${link.href}/`);
+    <nav aria-label="Main" className={cn("flex items-center gap-1", className)}>
+      {NAV_LINKS.map((link) => {
+        const active = isActive(pathname, link.href);
 
         return (
           <Link

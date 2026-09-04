@@ -65,9 +65,7 @@ export default async function GroupSettingsPage(
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base text-foreground">
-            Group details
-          </CardTitle>
+          <CardTitle>Group details</CardTitle>
           <CardDescription>
             Only admins can change these. Members see the result everywhere.
           </CardDescription>
@@ -89,9 +87,7 @@ export default async function GroupSettingsPage(
 
       <Card className="border-danger/30">
         <CardHeader>
-          <CardTitle className="text-base text-foreground">
-            Delete this group
-          </CardTitle>
+          <CardTitle>Delete this group</CardTitle>
           <CardDescription>
             Its members, invitations, categories, budgets and expenses go with
             it. This cannot be undone.

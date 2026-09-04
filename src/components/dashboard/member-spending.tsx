@@ -52,7 +52,7 @@ export function MemberSpending({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base text-foreground">
+        <CardTitle className="flex items-center gap-2">
           <Users aria-hidden className="size-4 text-muted-foreground" />
           Spending by member
         </CardTitle>
