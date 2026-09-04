@@ -16,7 +16,8 @@
     "verify:budgets": "node scripts/verify-budgets.mjs",
     "verify:dashboards": "node scripts/verify-dashboards.mjs",
     "verify:search": "node scripts/verify-search.mjs",
-    "verify:export": "node scripts/verify-export.mjs"
+    "verify:export": "node scripts/verify-export.mjs",
+    "audit:security": "node scripts/audit-security.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

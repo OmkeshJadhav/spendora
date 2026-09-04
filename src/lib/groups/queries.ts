@@ -5,6 +5,7 @@ import { cache } from "react";
 import { requireUser } from "@/lib/auth/dal";
 import { createClient } from "@/lib/supabase/server";
 import { hashInvitationToken, isPlausibleToken } from "@/lib/groups/tokens";
+import { isUuid } from "@/lib/ids";
 import type {
   CurrencyCode,
   Group,
@@ -171,9 +172,19 @@ export const listMyGroups = cache(async (): Promise<GroupSummary[]> => {
  * Invitations are fetched only for admins. A member's own query would return
  * any invitation addressed to their email — correct per the policy, but not
  * something the group page should be showing them.
+ *
+ * The id arrives from a route segment, so its shape is checked before it
+ * reaches a query: a value that is not a uuid cannot name a group, and asking
+ * Postgres to cast it would raise `22P02` and surface as an error page rather
+ * than as the 404 every caller here already renders for a group that is not
+ * theirs.
  */
 export const getGroupDetail = cache(
   async (groupId: string): Promise<GroupDetail | null> => {
+    if (!isUuid(groupId)) {
+      return null;
+    }
+
     const user = await requireUser();
     const supabase = await createClient();
 

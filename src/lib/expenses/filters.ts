@@ -1,5 +1,6 @@
 import { isIsoDate, monthParam, monthRange, parseMonthParam, type IsoDate } from "@/lib/dates";
 import { PAYMENT_MODES } from "@/lib/constants";
+import { isUuid } from "@/lib/ids";
 import type { MonthKey, PaymentMode } from "@/types";
 
 /**
@@ -61,9 +62,6 @@ export const EMPTY_FILTERS: ExpenseFilters = {
   month: null,
 };
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 type ParamValue = string | string[] | undefined;
 
 export type ExpenseSearchParams = {
@@ -83,7 +81,7 @@ function first(value: ParamValue): string | null {
 }
 
 function uuidOrNull(value: string | null): string | null {
-  return value && UUID_PATTERN.test(value) ? value : null;
+  return isUuid(value) ? value : null;
 }
 
 function isoDateOrNull(value: string | null): IsoDate | null {

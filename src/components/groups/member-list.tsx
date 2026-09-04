@@ -13,6 +13,13 @@ import type { GroupMemberView } from "@/lib/groups/queries";
  * Role is stated in words as well as shown as a badge, and the controls that
  * change it only render for admins — the database refuses them for anyone
  * else regardless, so this is about not offering what cannot be done.
+ *
+ * Email addresses are shown to admins only. An admin invites by address and
+ * needs to see which one somebody joined under; a member needs a name. RLS
+ * lets group peers read each other's profile rows either way (the trade-off
+ * `profiles_select_group_peers` records), so this narrows what the application
+ * puts on screen rather than what the database will hand out — but the screen
+ * is where an address is actually read, copied and carried off.
  */
 export function MemberList({
   groupId,
@@ -46,8 +53,12 @@ export function MemberList({
                 </Badge>
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                {member.profile?.email ?? "Account removed"}
-                <span aria-hidden> · </span>
+                {isAdmin ? (
+                  <>
+                    {member.profile?.email ?? "Account removed"}
+                    <span aria-hidden> · </span>
+                  </>
+                ) : null}
                 Joined {formatTimestamp(member.joined_at)}
               </p>
             </div>

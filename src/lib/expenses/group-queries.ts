@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth/dal";
 import { applyExpenseFilters } from "@/lib/expenses/filter-query";
 import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
 import type { ExpenseCategory } from "@/lib/expenses/queries";
+import { isUuid } from "@/lib/ids";
 import { sumAmounts } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import type { Expense } from "@/types";
@@ -270,6 +271,12 @@ export async function getGroupExpense(
   expenseId: string,
   isAdmin = false,
 ): Promise<GroupExpense | null> {
+  // Both arrive from route segments. See `lib/ids` for why the shape is
+  // checked before either reaches a query.
+  if (!isUuid(groupId) || !isUuid(expenseId)) {
+    return null;
+  }
+
   const user = await requireUser();
   const supabase = await createClient();
 

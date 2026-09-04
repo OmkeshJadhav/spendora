@@ -5,6 +5,7 @@ import { cache } from "react";
 import { requireUser } from "@/lib/auth/dal";
 import { applyExpenseFilters } from "@/lib/expenses/filter-query";
 import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
+import { isUuid } from "@/lib/ids";
 import { sumAmounts } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 import type { Category, Expense } from "@/types";
@@ -179,6 +180,13 @@ export async function listRecentPersonalExpenses(
 export async function getPersonalExpense(
   id: string,
 ): Promise<PersonalExpense | null> {
+  // From a route segment: a value that is not a uuid names nothing, and would
+  // otherwise reach Postgres as a failed cast and surface as an error page
+  // instead of the 404 the caller renders for an expense that is not theirs.
+  if (!isUuid(id)) {
+    return null;
+  }
+
   const user = await requireUser();
   const supabase = await createClient();
 

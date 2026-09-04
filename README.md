@@ -135,6 +135,8 @@ npm run verify:budgets         # categories and budgets
 npm run verify:dashboards      # personal and group dashboards
 npm run verify:search          # search, filters and history
 npm run verify:export          # CSV and Excel export
+
+npm run audit:security         # the security audit (Phase 12)
 ```
 
 Each suite creates throwaway accounts and deletes them at the end, even on
@@ -142,7 +144,21 @@ failure. They need `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` for that, and
 run against `http://localhost:3000` unless `BASE_URL` says otherwise. Because
 every page is compiled on demand under `next dev`, a full pass is slow.
 
-A consolidated security and authorization audit arrives in Phase 12.
+### The security audit
+
+`npm run audit:security` is the odd one out, and deliberately so. The
+`verify-*` suites prove that a phase's feature works and end by proving it
+cannot be misused. The audit is *only* the misuse, and it crosses every phase:
+every check in it is an attack that is expected to fail, so a passing line
+means the attack was refused. If the application stopped working altogether,
+most of it would still pass — which is why it supplements the other suites
+rather than replacing them.
+
+It covers secrets, response headers, authentication, the anonymous role,
+one user's records against another's, group roles, expense tampering,
+invitations, budget and dashboard arithmetic, export, and identifiers that name
+nothing. The service role key is used only to create and delete the throwaway
+accounts; the code under test never sees it.
 
 ## Project structure
 

@@ -16,7 +16,7 @@ Tracks what has actually been built, phase by phase, against
 | 9     | Search, filters + history      | ✅ Complete    |
 | 10    | Export                         | ✅ Complete    |
 | 11    | UI polish                      | ✅ Complete    |
-| 12    | Testing + security audit       | ⬜ Not started |
+| 12    | Testing + security audit       | ✅ Complete    |
 | 13    | Production readiness           | ⬜ Not started |
 
 > ✅ **No temporary deviations are active.** The email-confirmation bypass that
@@ -2704,6 +2704,338 @@ verification meaningless.
 Phase 12's deliberate unauthorized-access testing is untouched. The suites this
 phase re-ran are the existing ones; none were added, because no behaviour was
 added.
+
+---
+
+## Phase 12 — Testing + security audit (complete, 4 September 2026)
+
+Specification §61's Phase 12 is three sentences: test authentication, RLS,
+authorization, expenses, groups, invitations, budgets, dashboard calculations
+and export; *attempt unauthorized access deliberately*; fix every discovered
+issue.
+
+The first list was already covered. Eleven phases had shipped eight
+`verify-*.mjs` suites totalling 403 checks, and each one ends with a section
+proving its own feature cannot be misused. Re-running them would have been
+theatre. What was missing was the middle sentence — a pass whose *only*
+content is the attack, run across every phase at once, by somebody looking for
+a way in rather than confirming a way through.
+
+That is `scripts/audit-security.mjs`, and it found four issues. All four are
+fixed.
+
+### What the audit is, and what it is not
+
+`npm run audit:security` — 101 checks in eleven sections. Every one of them is
+an attack that is expected to fail, so a passing line means the attack was
+refused. If the application stopped working entirely, most of this suite would
+still pass. That is the point, and it is also why it supplements the
+`verify-*` suites rather than replacing them.
+
+Three surfaces, because a rule stated in one place and not the others is not a
+rule:
+
+| Surface | What it proves |
+| ------- | -------------- |
+| PostgREST, with each user's own JWT | §31's "members must not be able to bypass permissions by directly calling Supabase APIs". Every write the application refuses is retried with the application removed from the path |
+| HTTP, as a signed-in browser | Route gating, what a page renders for somebody who should not have it, and the headers the response carries |
+| The anonymous role, and the build output | What is reachable with no session at all, and what a browser is handed |
+
+The service role key is used only to create and delete the throwaway accounts.
+The code under test never sees it.
+
+### Finding 1 — a malformed id raised a database error instead of a 404
+
+**Severity: medium. Fixed.**
+
+Every row is keyed by a `uuid`, and ids arrive from route segments. PostgreSQL
+rejects a malformed uuid with `22P02` rather than returning no rows, so a query
+built from an unchecked segment *threw* instead of coming back empty:
+
+| Request | Before | After |
+| ------- | ------ | ----- |
+| `/groups/not-a-uuid` | error card, `[groups:getGroup] invalid input syntax for type uuid` in the log | not found |
+| `/groups/<junk>/expenses`, `/dashboard`, `/categories`, `/settings`, `/expenses/new` | error card | not found |
+| `/expenses/<junk>/edit` | error card | not found |
+| `/groups/<id>/expenses/<junk>/edit` | error card | not found |
+| `/api/groups/<junk>/expenses/export` | **HTTP 500** | HTTP 404 |
+
+Two things were wrong with that. §28 asks that unauthorized access and missing
+resources be understandable, and a malformed id is the clearest possible case
+of a resource that does not exist — it should read exactly as a stranger's
+valid id already reads. And a stream of junk ids was a free error-log
+amplifier: one database error written per request, and a 500 on a route
+reachable by anyone with a session.
+
+Nothing was *disclosed* by it. RLS was never in question here; the query never
+ran. But "no such group" and "not your group" were distinguishable by the shape
+of the failure, which is the thing §32's `notFound()` convention exists to
+prevent.
+
+The fix is `src/lib/ids.ts` — one `isUuid()` guard — applied at the three
+readers that take an id from a route:
+
+- `getGroupDetail()`, which every group page and the group export already gate
+  on, so one guard covers all seven routes and the export handler,
+- `getPersonalExpense()`,
+- `getGroupExpense()`.
+
+`lib/expenses/filters.ts` had its own copy of the pattern; it now imports the
+shared one, so there is a single definition. The guard is explicitly not an
+authorization check and says so in its own comment: a well-formed id proves
+nothing about who may read the row, and RLS still answers that.
+
+### Finding 2 — no security response headers
+
+**Severity: medium. Fixed.**
+
+Every response carried none of the protections a browser can only apply if it
+is told to:
+
+```text
+x-frame-options:          (absent)
+content-security-policy:  (absent)
+x-content-type-options:   (absent)
+referrer-policy:          (absent)
+permissions-policy:       (absent)
+strict-transport-security:(absent)
+x-powered-by:             Next.js
+```
+
+Clickjacking is not theoretical here. Every destructive control in the
+application is a plain POST form — delete a group, remove a member, delete an
+expense — so a page that can be framed is a page whose buttons can be borrowed.
+
+`next.config.ts` now sets, for every route: `frame-ancestors 'none'` and
+`X-Frame-Options: DENY`; `nosniff`, which matters because exports are served as
+`text/csv` and as a binary spreadsheet type; `strict-origin-when-cross-origin`,
+because export links carry the filters in force — a search term among them — in
+their query string; a `Permissions-Policy` closing the APIs nothing here uses;
+and HSTS without `includeSubDomains`, since this application does not own its
+siblings. `poweredByHeader: false` stops advertising the framework.
+
+Deliberately *not* a full Content-Security-Policy. A useful `script-src` for
+this app needs a per-request nonce for Next's inline bootstrap, which is a
+proxy concern rather than a static header — and a CSP that is wrong is worse
+than none, because it either breaks the application or lulls with
+`unsafe-inline`. `frame-ancestors` is the half that works as a constant, so
+that is the half stated.
+
+### Finding 3 — every member saw every other member's email address
+
+**Severity: low. Fixed.**
+
+`profiles_select_group_peers` lets group peers read each other's profile rows.
+That is a deliberate Phase 3 trade-off and it is still right: members need each
+other's *names*, or the whole application shows UUIDs. But the members list was
+printing the address as well, to everyone.
+
+An admin needs it — they invite by address, and need to see which one somebody
+joined under. A member does not. `member-list.tsx` now shows the address to
+admins only; names, roles and joined dates are unchanged for everyone.
+
+The residual exposure is recorded rather than claimed to be closed: RLS still
+hands a peer's row to a peer, and PostgreSQL's row-level security cannot make
+one *column* conditional on a group role. Narrowing it properly would mean
+routing the members list through a `security definer` function that returns the
+address only to admins. That is a migration, and it buys little against
+somebody already willing to call PostgREST by hand — but it is the honest next
+step if this ever matters more. What did change is what the application puts on
+a screen, which is where an address is actually read, copied and carried off.
+
+### Finding 4 — the suite's own not-found detector was vacuous
+
+**Severity: none, in the application. Fixed in the suite.**
+
+Worth recording because it nearly produced a false clean bill of health, and
+because the reason generalises to anything that tests a streamed page.
+
+A route with a `loading.tsx` streams its shell immediately, so `200 OK` is
+committed long before the page decides anything. The status is therefore not
+evidence. The first version of the audit read the rendered copy instead — and
+that is worse:
+
+- **`not-found.tsx` is a Server Component**, so its markup ships as the
+  boundary's fallback in the payload of *every* page in the segment. Matching
+  on "Not found" made every check pass while proving nothing.
+- **`error.tsx` is a Client Component**, so its copy appears in *no* response,
+  even when the boundary actually renders.
+
+Both were confirmed side by side rather than assumed. What does distinguish the
+three outcomes is the digest Next writes into the flight stream:
+`notFound()` carries `NEXT_HTTP_ERROR_FALLBACK;404`, a thrown error carries a
+numeric digest, and a page that rendered carries none. Verified by disabling
+the Finding 1 guard and watching the malformed case move from one to the other.
+
+### The audit was mutation-tested
+
+A suite of refusals is easy to write and easy to write wrongly — Finding 4 is
+what that looks like. So each fix was reverted in turn and the audit re-run, to
+confirm the checks actually catch what they claim:
+
+| Reverted | Result |
+| -------- | ------ |
+| the `isUuid` guard | 8 failures — every malformed-id check flipped to `error`, and the export route to `status 500` |
+| `headers()` in `next.config.ts` | 6 failures across the header section |
+| the member-list email condition | 1 failure — "a member was shown another member's address" |
+
+All fifteen failures were in the sections that own those claims, and nowhere
+else. Restored, the audit passes 101/101.
+
+### What was attacked and refused
+
+Everything below is a check that now passes, meaning the attempt failed.
+
+**Secrets (§32).** The service role key, the email API key and the database URL
+appear in no rendered page and in no file under `.next/static`. Nothing in
+`src/` so much as names `SERVICE_ROLE`. Not even the anon key is shipped: every
+Supabase call is server-side, so there is no browser client to hand a key to.
+
+**Authentication (§4).** Eight private paths, a group's four pages and both
+export routes all refuse an anonymous visitor and carry the destination back in
+`?next=`. An RSC request is gated like a navigation. A signed-in user cannot be
+bounced off-site by `?next=https://evil.test`, `//evil.test`, `/\evil.test` or
+`/%2F%2Fevil.test`. An unconfirmed address is given no session. A signed-out
+session stops working.
+
+**The anonymous role (§31).** All seven tables refused, reads and writes. All
+six RPCs refused, `mask_email()` and `current_user_email()` included.
+
+**One user against another (§6, §31).** A stranger cannot read, edit or delete
+a private expense, nor write one into somebody else's records, nor read or
+rename a private category, nor budget one. A profile is readable only to its
+owner and their group peers, and a crafted update cannot rewrite its `id` or
+`email` — the pinning trigger puts both back.
+
+**Group roles (§9, §31).** A non-member reads nothing of a group — not the
+group, its members, expenses, categories, budgets or invitations — cannot add
+themselves, and gets a not-found page that never contains the group's name. A
+member cannot rename the group, change its currency, delete it, promote
+themselves, remove anyone else, add or rename or delete a category, change or
+clear a budget, or issue an invitation. Nor are they offered any of it on
+screen.
+
+**Expenses (§7, §45).** A group expense cannot be re-parented into private
+records — `expenses_pin_identity` puts `group_id` and `user_id` back. An amount
+cannot be made zero or negative. A group expense must carry the group's
+currency. The payer must be a member. A member cannot edit or delete somebody
+else's group expense. A category belonging to another owner cannot be attached
+to an expense, in either direction — the composite foreign keys refuse it even
+for somebody with every right to edit the row.
+
+**Invitations (§11).** An invitation is invisible to everyone but its
+addressee. An invitee cannot promote the role they were offered, extend their
+own deadline, join in a role they were not offered, or reopen an invitation
+they declined. A bystander holding the link cannot join, is told the invitation
+is addressed elsewhere, and sees the address masked rather than in the clear. A
+made-up link names no group. Expired and revoked invitations cannot be
+accepted. Membership cannot be duplicated. A group cannot be left without an
+admin.
+
+**Budgets and dashboard arithmetic (§15, §16, §19).** Seeded with 836.06 +
+63.93 + 0.01 — exactly 900.00 in paise and 899.9999999999999 in doubles, which
+is the case `lib/money` exists for. The page shows ₹900.00 spent, ₹100.00
+remaining and 90% against a ₹1,000 budget, and says "Nearing budget" in words.
+150 against a ₹100 budget reads as 150% and "Over budget". The month's total is
+checked against an independent sum taken from the rows themselves. A
+non-member's request for the same dashboard shows them none of it.
+
+**Export (§25, §32).** A non-member's group export is 404 with no rows in the
+body. A personal export contains neither another user's expenses nor the
+exporter's own group expenses. A leading `=` or `@` in an item name or a note
+is neutralised with an apostrophe, so a note cannot become a formula in
+somebody else's spreadsheet. A group named `Quote" ; Newline\r\nX-Audit-Injected: yes`
+produces a slug-safe filename and no injected header. An unrecognised `format`
+falls back to CSV rather than failing.
+
+### Reviewed and deliberately left alone
+
+**`Cache-Control` on signed-in pages.** Next answers a dynamic page with
+`no-cache, must-revalidate` and owns that header — neither `next.config.ts`
+nor the proxy can override it, and both were tried and reverted rather than
+left in as configuration that does nothing. It is adequate: `no-cache` means a
+cache may not serve the page to anybody without revalidating first, and that
+revalidation carries the second person's cookies, so a conformant shared cache
+cannot hand one user's dashboard to another. The residual is storage at rest in
+an intermediary. The audit asserts the directive stays non-cacheable, so a
+future change to something reusable is caught here. Where the application *does*
+own the header — the export routes — it sets `private, no-store`.
+
+**A group admin can mark somebody else's invitation `declined`.** The admin
+UPDATE policy permits it alongside the invitee's narrow decline policy. It is
+an admin acting inside their own group, and the effect is indistinguishable
+from revoking, which they may do anyway. Not an escalation.
+
+**Rate limiting on sign-in.** Supabase Auth owns it, and `authErrorMessage()`
+already maps `over_request_rate_limit` to copy a person can act on. Adding a
+second limiter in front of it would be a way to get the two out of step.
+
+**`..` as a route segment.** A URL parser resolves it before any request is
+sent, so it never reaches a route. Testing it would only be testing `fetch`,
+and it is left out of the suite with a note saying why.
+
+### No migration was needed
+
+Every finding was in the application layer. No column, index, constraint,
+policy or function moved, and `supabase/migrations/` is untouched. The database
+was attacked directly throughout and refused everything it should have refused
+— which is the strongest thing this phase has to report, because it is the
+layer that cannot be worked around.
+
+### Checks
+
+| Suite | Result |
+| ----- | ------ |
+| `npm run audit:security` | **101 passed, 0 failed** |
+| `npm run db:verify-rls` | 77 passed, 0 failed |
+| `npm run verify:expenses` | 41 passed, 0 failed |
+| `npm run verify:groups` | 71 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+| `npm run verify:budgets` | 57 passed, 0 failed |
+| `npm run verify:dashboards` | 51 passed, 0 failed |
+| `npm run verify:search` | 50 passed, 0 failed |
+| `npm run verify:export` | 52 passed, 0 failed |
+| `npm run typecheck` | clean |
+| `npm run lint` | clean |
+| `npm run build` | succeeds |
+
+**554 checks, all passing.** Every `verify-*` suite was re-run after the fixes,
+not only the audit: the `isUuid` guard sits in three readers that every group
+and expense page goes through, and the member-list change alters what
+`verify-groups` reads off the page. Both are behaviour, and behaviour that is
+only checked by the suite introduced alongside it is not checked.
+
+### Files changed
+
+| File | Change |
+| ---- | ------ |
+| `scripts/audit-security.mjs` | new — the audit, 101 checks in eleven sections |
+| `src/lib/ids.ts` | new — `isUuid()`, and why an unchecked route segment throws |
+| `src/lib/groups/queries.ts` | `getGroupDetail()` returns null for an id that cannot name a group |
+| `src/lib/expenses/queries.ts` | the same for `getPersonalExpense()` |
+| `src/lib/expenses/group-queries.ts` | the same for `getGroupExpense()`, both arguments |
+| `src/lib/expenses/filters.ts` | drops its private uuid pattern for the shared one |
+| `next.config.ts` | security headers for every route; `poweredByHeader: false` |
+| `src/components/groups/member-list.tsx` | peer email addresses shown to admins only |
+| `package.json` | `audit:security` script |
+| `README.md` | documents the audit and how it differs from the `verify-*` suites |
+
+### Deliberately not done in this phase
+
+No Phase 13 work. The build and lint runs above were insurance against a broken
+`next.config.ts`, not the production-readiness review — environment variables,
+migrations, performance, responsive design and the README review are Phase 13's
+and are untouched.
+
+No new dependency, no test framework, and no unit tests for the pure modules.
+`lib/money`, `lib/budgets/status` and `lib/dashboard/summary` are already
+exercised through the pages that render them, and the audit checks their output
+where it is visible. Adding Vitest to assert `percentageOf(900, 1000) === 90`
+would be a framework in exchange for a tautology.
+
+No penetration testing of Supabase itself, no dependency-vulnerability scan,
+and no load testing. The first is the provider's, and the other two belong to
+Phase 13's production review with a lockfile that is about to be deployed.
 
 ---
 
