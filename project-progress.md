@@ -19,11 +19,9 @@ Tracks what has actually been built, phase by phase, against
 | 12    | Testing + security audit       | ⬜ Not started |
 | 13    | Production readiness           | ⬜ Not started |
 
-> ⚠️ **One temporary deviation is still active, and is parked by decision.**
-> Sign-up email confirmation is not enforced end to end, and
-> `scripts/confirm-users.mjs` stays in place. This was reviewed on
-> 3 September 2026 and deliberately left as it is, to be revisited later. See
-> [Temporary: email confirmation bypassed](#temporary-email-confirmation-bypassed).
+> ✅ **No temporary deviations are active.** The email-confirmation bypass that
+> stood from 2 September 2026 was closed on 4 September 2026. See
+> [Closed: email confirmation bypass](#closed-email-confirmation-bypass).
 
 ---
 
@@ -180,9 +178,11 @@ Supabase dashboard settings the app depends on.
 ### Authentication flows
 
 - **Sign up** — Zod-validated, passes the name as user metadata for the trigger,
-  and sets `emailRedirectTo` to `/auth/confirm` on the request's own origin. If
-  the project requires email confirmation the form switches to a "check your
-  inbox" state; if not, the user is signed straight in.
+  and sets `emailRedirectTo` to `/auth/confirm` on the request's own origin. The
+  form then switches to a "check your inbox" state. (As of 4 September 2026 that
+  is the only outcome: an unconfirmed address is never signed in, whatever the
+  project's own setting says — see
+  [Closed: email confirmation bypass](#closed-email-confirmation-bypass).)
 - **Sign in** — email/password, with an optional `?next=` destination.
 - **Sign out** — a Server Action posted from a plain form, so it works without
   client-side JavaScript.
@@ -701,8 +701,8 @@ CSV export (Phase 10). Personal categories can be created while adding an
 expense but not yet renamed or archived from the UI — the schema and the
 actions already support both.
 
-The email-confirmation deviation recorded below is still active and still must
-be reverted in Phase 5.
+The email-confirmation deviation recorded below was still active at the time of
+this phase. It was closed on 4 September 2026.
 
 ---
 
@@ -2114,90 +2114,76 @@ categories page and the dashboard, which is where it belongs.
 
 ---
 
-## Temporary: email confirmation bypassed
+## Closed: email confirmation bypass
 
-**Added 2 September 2026. Reviewed 3 September 2026 and deliberately parked.**
+**Opened 2 September 2026. Parked 3 September 2026. Closed 4 September 2026.**
 
-> **Decision (3 September 2026):** leave this exactly as it is for now, and
-> revisit it later. Nothing below is scheduled against a phase any more. The
-> revert checklist at the end stays accurate and is what to follow when the
-> time comes.
->
-> Two things make this less urgent than it was when it was written. Invitations
-> are now answered in the application rather than by email, so no *feature*
-> depends on mail delivery. And the risk it carries — see
-> "What this costs" — is a production risk, and this is not deployed. It must
-> still be closed before it is.
+Sign-up email confirmation is now enforced end to end. The escape hatch is
+gone from the repository and the requirement is enforced by application code,
+not only by a setting in the Supabase dashboard.
 
-### Why it exists
+### What it was
 
-No email provider was wired up, so Supabase's confirmation links went nowhere.
-`signInWithPassword` refuses an unconfirmed account with `email_not_confirmed`,
-which made every feature impossible to exercise by hand.
+No email provider was wired up at the start, so Supabase's confirmation links
+went nowhere. `signInWithPassword` refuses an unconfirmed account with
+`email_not_confirmed`, which made every feature impossible to exercise by hand.
+`scripts/confirm-users.mjs` was added as a stopgap: run with the service role
+key, it marked every unconfirmed account as confirmed.
 
-### What Phase 5 resolved
+Nothing in `src/` ever imported it, and `mailer_autoconfirm` was never switched
+off — but while it existed, any address could be turned into a working account
+without proving ownership of it. Since group membership is granted by email
+address, that meant someone who guessed an invited address could register as it
+and accept the invitation.
 
-**The email service exists** (`src/lib/email/`, Resend) and sends group
-invitations. `EMAIL_API_KEY` and `EMAIL_FROM` are configured.
+### What changed to close it
 
-**Still no application code gates on email verification**, and none ever did.
-`src/lib/auth/actions.ts` calls `signUp` and `signInWithPassword` exactly as it
-always has, and `/auth/confirm` still verifies real one-time tokens.
-Verification is enforced by the Supabase project itself.
+**The script is deleted.** `scripts/confirm-users.mjs` and its
+`db:confirm-users` entry in `package.json` are gone. The `verify-*.mjs` suites
+are unaffected — they create their own fixture accounts with
+`admin.createUser({ email_confirm: true })` against a test project, which is
+test setup rather than a bypass of the sign-up path.
 
-### What is still outstanding
+**Confirmation is now enforced in application code**, in three places, so it no
+longer rests on the dashboard toggle alone:
 
-**Confirmation mail is sent by Supabase, not by us.** `EMAIL_API_KEY` has no
-bearing on it. Supabase's built-in sender is heavily rate-limited and, on
-current projects, only reaches project members — so a new sign-up by anyone
-else still receives nothing.
+| Layer | Rule |
+| ----- | ---- |
+| `src/lib/auth/actions.ts` | `signIn` re-checks `email_confirmed_at` after a successful password sign-in and signs the session straight back out if it is missing; `signUp` does the same with any session Supabase hands back, so an unverified address falls through to the "check your inbox" screen instead of being let in |
+| `src/lib/auth/dal.ts` | `getUser()` returns `null` for an unconfirmed account, so it reads as signed out at every call site; `requireUser()` redirects it to `/sign-in?error=email_not_confirmed`. Both share one memoised auth-server round trip through a private `getAuthUser()` |
+| `src/proxy.ts` | Navigation treats a session without `email_confirmed_at` as signed out, so private routes bounce to sign-in and the auth pages stay reachable |
 
-Checked directly against the project's auth settings on 3 September 2026:
-`mailer_autoconfirm` is `false`, so **confirmation is required and has never
-been switched off**. Each new sign-up therefore lands on the "check your inbox"
-screen and needs `npm run db:confirm-users` before it can sign in. Existing
-accounts are unaffected.
+`hasConfirmedEmail()` in the DAL is the single expression of the rule. The
+sign-in page renders an explanation when it is redirected to with
+`?error=email_not_confirmed`, so the bounce is never silent.
 
-`scripts/confirm-users.mjs` was **kept** rather than deleted. Deleting it while
-confirmation mail cannot actually be delivered would leave no way to onboard an
-account at all, and configuring delivery needs the Supabase dashboard, which is
-not reachable from the codebase. It reads `SUPABASE_SERVICE_ROLE_KEY`, nothing
-in `src/` imports it, and it never reaches the browser.
+The effect is that turning **Confirm email** off in the dashboard no longer
+weakens the application — it locks new sign-ups out instead, because nothing
+would send them the link they now need. `README.md` and `supabase/README.md`
+both say so.
 
-### What this costs while it is in place
+### What is still required outside the codebase
 
-- Anyone can register with an address they do not own.
-- A typo'd email silently becomes an account nobody can recover.
-- **Group invitations are addressed by email**, and membership is granted to
-  whoever holds an account at that address — through the in-app inbox now, as
-  well as through a link. With verification not actually enforced end to end,
-  someone who guesses an invited address could register as it and accept the
-  invitation. This is the reason it must not reach production, and it did not
-  get smaller when invitations moved in-app: the in-app inbox is keyed on the
-  account's email exactly as the link was.
+Two Supabase dashboard settings. Neither is reachable from here, and **until
+they are done on a given project, a new sign-up on that project cannot
+complete** — Supabase's built-in sender only reaches project members, so the
+confirmation link never arrives and the account can no longer be waved through
+by hand.
 
-The database is unaffected: every RLS policy, constraint and trigger still
-applies, and all 77 authorization assertions still pass.
+1. **Custom SMTP** under Authentication → Emails → SMTP Settings. The Resend
+   credentials in `.env.local` can be reused; the sending domain has to be
+   verified with Resend either way (the sandbox sender refuses every recipient
+   but the account owner's own address).
+2. **Site URL and redirect URLs** under Authentication → URL Configuration, so
+   `/auth/confirm` and `/invite/<token>` resolve on the deployed origin rather
+   than `http://localhost:3000`. Set `APP_ORIGIN` to the same value so
+   invitation links do not depend on the request's `Host` header.
 
-### How to finish the revert, when it is picked up again
+Then verify the round trip by hand: sign up, receive the mail, follow the link,
+land signed in; confirm an unconfirmed account cannot sign in; and send one
+group invitation to a real address and follow it through.
 
-Two Supabase dashboard settings and one manual check. Neither setting is
-reachable from the codebase.
-
-1. **Configure custom SMTP** in Authentication → Emails → SMTP Settings. The
-   Resend credentials already in `.env.local` can be reused; the sending domain
-   has to be verified with Resend either way (today's key is on the sandbox
-   sender, which refuses every recipient but the account owner's own address).
-2. **Set the Site URL and redirect URLs** under Authentication → URL
-   Configuration so `/auth/confirm` and `/invite/<token>` resolve on the
-   deployed origin, not just `http://localhost:3000`. Set `APP_ORIGIN` to the
-   same value so invitation links do not depend on the request's `Host` header.
-3. Leave **Confirm email on** — it already is.
-4. **Verify the round trip by hand**: sign up, receive the mail, follow the
-   link, land signed in; then confirm an unconfirmed account cannot sign in.
-   Also send one group invitation to a real address and follow it through.
-5. **Then delete `scripts/confirm-users.mjs`** and its `db:confirm-users` entry
-   in `package.json`.
-6. Delete this section and the warning at the top of this file.
-
-Until step 6 is done, this deviation is live.
+Any account confirmed by the deleted script before 4 September 2026 stays
+confirmed — the script wrote `email_confirmed_at` in Supabase, and removing it
+does not reverse that. On a project where those accounts matter, review them
+and delete any whose address was never genuinely owned.

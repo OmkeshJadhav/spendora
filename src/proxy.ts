@@ -65,9 +65,13 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // An account whose email address has not been confirmed navigates as though
+  // it were signed out; the data access layer applies the same rule.
+  const signedIn = Boolean(user?.email_confirmed_at);
+
   const { pathname, search } = request.nextUrl;
 
-  if (!user && !isPublic(pathname)) {
+  if (!signedIn && !isPublic(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/sign-in";
     url.search = "";
@@ -76,7 +80,7 @@ export async function proxy(request: NextRequest) {
     return redirectPreservingCookies(url, response);
   }
 
-  if (user && AUTH_PATHS.includes(pathname)) {
+  if (signedIn && AUTH_PATHS.includes(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

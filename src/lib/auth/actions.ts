@@ -86,7 +86,13 @@ export async function signUp(
     }
 
     // With email confirmation enabled, Supabase returns a user but no session.
-    hasSession = Boolean(data.session);
+    // If it hands back a session anyway, it is only usable once the address has
+    // been verified — so drop it rather than signing an unverified user in.
+    hasSession = Boolean(data.session) && Boolean(data.user?.email_confirmed_at);
+
+    if (data.session && !hasSession) {
+      await supabase.auth.signOut();
+    }
 
     if (!hasSession) {
       return {
@@ -134,12 +140,27 @@ export async function signIn(
 
   try {
     const supabase = await createClient();
-    const { error } = await supabase.auth.signInWithPassword(parsed.data);
+    const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
 
     if (error) {
       return {
         status: "error",
         message: authErrorMessage(error, "signIn"),
+        values: echo,
+      };
+    }
+
+    // Supabase normally refuses this itself with `email_not_confirmed`. The
+    // check is repeated so the gate holds even if the project's "Confirm
+    // email" setting is ever turned off: an address nobody has proved they own
+    // must not get a session, because group membership is granted by email.
+    if (!data.user?.email_confirmed_at) {
+      await supabase.auth.signOut();
+
+      return {
+        status: "error",
+        message:
+          "Please confirm your email address first — check your inbox for the link.",
         values: echo,
       };
     }

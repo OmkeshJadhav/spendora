@@ -34,12 +34,18 @@ npx supabase db push
 ## After the first migration
 
 In the Supabase dashboard, under Authentication → Providers, make sure **Email**
-is enabled. "Confirm email" is on by default; the app handles both settings:
+is enabled and **Confirm email** is on. It is on by default, and the
+application depends on it: sign up shows a "check your inbox" screen, and the
+link in the email lands on `/auth/confirm`, which verifies the token and signs
+the user in.
 
-- **Confirmation on** — sign up shows a "check your inbox" screen, and the link
-  in the email lands on `/auth/confirm`, which verifies the token and signs the
-  user in.
-- **Confirmation off** — sign up signs the user in immediately.
+**Turning "Confirm email" off does not sign people in faster — it locks them
+out.** The application enforces a confirmed address itself, in
+`src/lib/auth/actions.ts`, `src/lib/auth/dal.ts` and `src/proxy.ts`: an account
+with no `email_confirmed_at` cannot sign in and is treated as signed out
+everywhere. That check is deliberate rather than defensive duplication —
+group membership is granted by email address, so an address nobody has proved
+they own must not be able to accept an invitation meant for someone else.
 
 Under Authentication → URL Configuration, set the Site URL to your app origin
 (`http://localhost:3000` in development) so confirmation links point back to it.

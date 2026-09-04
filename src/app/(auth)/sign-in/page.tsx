@@ -16,6 +16,7 @@ export default async function SignInPage({
   // Only forward a same-site path; anything else falls back to the dashboard.
   const next = safeRedirectPath(nextParam);
   const linkError = params.error === "invalid_link";
+  const unconfirmed = params.error === "email_not_confirmed";
 
   return (
     <Card>
@@ -32,6 +33,15 @@ export default async function SignInPage({
           >
             That link is invalid or has expired. Please sign in, or request a new
             link.
+          </p>
+        ) : null}
+        {unconfirmed ? (
+          <p
+            role="alert"
+            className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+          >
+            Your email address has not been confirmed yet. Follow the link we
+            sent you, then sign in.
           </p>
         ) : null}
         <SignInForm next={next === "/dashboard" ? undefined : next} />

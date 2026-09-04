@@ -68,11 +68,17 @@ which key is missing without printing its value.
 3. Apply the migrations in `supabase/migrations/` — the SQL Editor, `psql`, or
    the Supabase CLI all work. See [`supabase/README.md`](./supabase/README.md)
    for the commands and for what each migration contains.
-4. Under Authentication → Providers, enable **Email**. Both settings of
-   "Confirm email" are handled by the app.
+4. Under Authentication → Providers, enable **Email** and leave **Confirm
+   email** on. The application requires a confirmed address of its own accord —
+   an unconfirmed account cannot sign in and is treated as signed out — so
+   turning the setting off locks new sign-ups out rather than letting them in.
 5. Under Authentication → URL Configuration, set the Site URL to your app origin
    (`http://localhost:3000` in development) so confirmation links come back to
    the app.
+6. Under Authentication → Emails → SMTP Settings, configure a custom SMTP
+   sender. Supabase's built-in sender is heavily rate-limited and only reaches
+   project members, so without this a new sign-up never receives its
+   confirmation link and can never sign in.
 
 Everything the browser touches goes through the anon key, so **Row Level
 Security is the security boundary** — the anon key alone grants no access to
