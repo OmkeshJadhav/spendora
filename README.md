@@ -4,10 +4,10 @@ A monthly expense tracker for personal and shared spending. Record expenses,
 organise them into groups with per-category monthly budgets, and see where the
 money went — month by month.
 
-> **Status:** in development. Phases 1-9 are complete — authentication,
+> **Status:** in development. Phases 1-10 are complete — authentication,
 > personal and group expenses, groups and in-app invitations, categories and
-> budgets, dashboards, and search, filters and history. CSV export, UI polish
-> and the security audit land in later phases. See
+> budgets, dashboards, search, filters and history, and CSV/Excel export. UI
+> polish and the security audit land in later phases. See
 > [`project-progress.md`](./project-progress.md) for what exists today and
 > [`master-specifications.md`](./master-specifications.md) for the full plan.
 
@@ -134,6 +134,7 @@ npm run verify:group-expenses  # group expenses
 npm run verify:budgets         # categories and budgets
 npm run verify:dashboards      # personal and group dashboards
 npm run verify:search          # search, filters and history
+npm run verify:export          # CSV and Excel export
 ```
 
 Each suite creates throwaway accounts and deletes them at the end, even on

@@ -7,6 +7,7 @@ import { ExpenseFilterBar } from "@/components/expenses/expense-filters";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { ExpensePagination } from "@/components/expenses/expense-pagination";
 import { ExpenseScopeNav } from "@/components/expenses/expense-scope-nav";
+import { ExportMenu } from "@/components/expenses/export-menu";
 import { GroupExpenseActions } from "@/components/expenses/group-expense-actions";
 import { FlashToast } from "@/components/flash-toast";
 import { GroupContext } from "@/components/groups/group-context";
@@ -120,7 +121,13 @@ export default async function GroupExpensesPage(
           clearing one would mean going back rather than pressing "Clear". */}
       {total > 0 || filtered ? (
         <>
-          <ExpenseScopeNav basePath={basePath} filters={filters} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ExpenseScopeNav basePath={basePath} filters={filters} />
+            <ExportMenu
+              basePath={`/api/groups/${group.id}/expenses/export`}
+              filters={filters}
+            />
+          </div>
           <ExpenseFilterBar
             basePath={basePath}
             filters={filters}

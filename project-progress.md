@@ -14,7 +14,7 @@ Tracks what has actually been built, phase by phase, against
 | 7     | Categories + budgets           | ✅ Complete    |
 | 8     | Dashboards                     | ✅ Complete    |
 | 9     | Search, filters + history      | ✅ Complete    |
-| 10    | Export                         | ⬜ Not started |
+| 10    | Export                         | ✅ Complete    |
 | 11    | UI polish                      | ⬜ Not started |
 | 12    | Testing + security audit       | ⬜ Not started |
 | 13    | Production readiness           | ⬜ Not started |
@@ -2111,6 +2111,354 @@ appealing idea, but it would change chart markup that Phase 8's suite reads,
 and the month link beside the navigator already covers what §23 asks for. The
 personal list still has no per-category budget context — that lives on the
 categories page and the dashboard, which is where it belongs.
+
+---
+
+## Phase 10 — Export (complete, 4 September 2026)
+
+Specification §25: download the expenses for a selected month, as CSV and as
+Excel, with a proper filename and correct currency and date formatting — from
+both the personal and the group expense list. No UI polish; that is Phase 11
+and nothing here anticipates it.
+
+### No migration was needed
+
+An export reads rows that already exist through filters that already exist. No
+column, index, constraint or policy changed, and `supabase/migrations/` is
+untouched. `db:verify-rls` was re-run against the live database anyway and
+passed 77/77 — the result to expect from a phase that adds no migration, and
+worth confirming rather than assuming.
+
+### Exporting is "give me a file of what I am looking at"
+
+Phase 9 ended by predicting this: *"the export will want the same
+`ExpenseFilters` this phase defined, so exporting 'what I am looking at' should
+be a small addition rather than a second query language."* That held, and it is
+the design decision the whole phase rests on.
+
+The export links carry `filterParams(filters)` — the exact query string the
+list is already showing — and the route parses it with the same
+`parseExpenseFilters` and applies it with the same `applyExpenseFilters`. There
+is one implementation of what "paid by cash in September" means, and now three
+things read it: the personal list, the group list, and the export. A filter
+that narrows the screen narrows the file identically, because there is nothing
+else it could do.
+
+It also means the export inherited Phase 9's leniency for free. An unreadable
+filter in an export URL is dropped rather than rejected, so a stale link
+downloads a file instead of an error page.
+
+### What was built
+
+**`src/lib/export/format.ts`** — the format registry. CSV and XLSX as data
+rather than as branches, so §25's "design the architecture so XLSX/PDF export
+can be added later" is answered by a third entry plus a writer. The export
+links map over it, so a new format appears in the UI by existing.
+
+**`src/lib/export/rows.ts`** — `ExportRow` and `EXPORT_COLUMNS`: the nine
+columns §25 lists, in the order it lists them, defined once and read by both
+writers. Values stay in their own types — an amount is a number, a date is a
+date — and each writer formats as late as it can.
+
+**`src/lib/export/csv.ts`** — RFC 4180. CRLF endings, quoting only where
+needed, a UTF-8 BOM, and formula neutralisation.
+
+**`src/lib/export/zip.ts`** — a minimal ZIP writer, about a hundred lines of
+PKWARE APPNOTE 6.3.x. Local headers, a central directory, an
+end-of-central-directory record, CRC-32, and Node's own zlib for deflate.
+
+**`src/lib/export/xlsx.ts`** — the six XML parts of a one-sheet OOXML workbook.
+
+**`src/lib/export/filename.ts`** — `goa-trip-september-2026-expenses.csv`, and
+the slug rules behind it.
+
+**`src/lib/export/queries.ts`** — the rows, read in chunks, for a personal list
+or a group.
+
+**`src/lib/export/response.ts`** — headers, filename and the too-large message,
+shared by both routes so they cannot drift apart.
+
+**Two route handlers** — `/api/expenses/export` and
+`/api/groups/[id]/expenses/export`.
+
+**`src/components/expenses/export-menu.tsx`** — the control, on both lists.
+
+### Why the export is a link, not a button
+
+A GET route handler rather than a Server Action. A download is an HTTP response
+with a `Content-Disposition` on it, which a Server Action has no way to be —
+but the better reason is what being a link buys, and it is the same list Phase
+9 made for filters:
+
+- The export is **shareable and repeatable**: the URL says exactly which
+  expenses, under which filters, in which format.
+- It **works with JavaScript turned off**. The client component exists only for
+  the toast; the anchors are server-rendered and would work without it.
+- The **back button and history** behave, because nothing is client state.
+
+No client-side download machinery, no blob URLs, no `fetch` and `URL.createObjectURL`.
+
+### Why the Excel export is a real XLSX, written by hand
+
+The phase asks for Excel as well as CSV, and there were three honest readings:
+a `.csv` renamed, a SpreadsheetML 2003 `.xls` (which modern Excel opens behind
+a warning dialog), or a real `.xlsx`. Only the third is what a person means.
+
+That left the dependency question. `exceljs` and SheetJS are the obvious
+answers, and both are large — a dependency tree several times the size of the
+rest of the application's, against a requirement of one sheet, nine columns and
+two number formats. §3 says not to add libraries that earn less than they cost,
+so the writer is here: `zip.ts` and `xlsx.ts`, about 350 lines between them,
+against two formats (ZIP and OOXML) that have not changed in a decade and have
+nothing to keep patched.
+
+**The point of the XLSX over the CSV is types.** In a CSV every cell is text,
+so amounts cannot be summed and dates sort alphabetically until the reader
+re-imports the file and tells Excel what each column is. In the workbook:
+
+- **Amounts are number cells** carrying a currency format, so the cell displays
+  the amount formatted *and* adds up. That is what §25's "correct currency
+  formatting" has to mean in a spreadsheet — a formatted string in a numeric
+  column is a picture of a number.
+- **Dates are date cells** with a `dd mmm yyyy` format: "10 Sep 2026" on screen,
+  chronological when sorted.
+- The sheet has a **frozen bold header row and filter dropdowns**, because a
+  file that opens ready to read is the difference between an export and a dump.
+
+Two decisions inside it are worth recording:
+
+- **`t="inlineStr"` rather than a shared-strings table.** It costs a little size
+  on repeated category names and saves a whole part, an index and a second
+  pass. It also makes the CSV injection question disappear on this side: a cell
+  that declares itself a string is never evaluated, so an item name beginning
+  `=` needs no defending against.
+- **The epoch is 30 December 1899, not the 31st.** Excel deliberately
+  reproduces Lotus 1-2-3's belief that 1900 was a leap year, and shifting the
+  epoch back a day is how every date after February 1900 comes out right. The
+  serials are computed in UTC — not because the value is UTC, but because
+  `expense_date` is a calendar day with no zone at all, and UTC arithmetic has
+  no daylight-saving jump to round a day across a boundary.
+
+### Amount and Currency are two columns, and Amount is a bare number
+
+§25 lists them separately, and the reason is worth stating because it looks
+like a formatting regression on first reading. `₹2,450.00` in a CSV's Amount
+column cannot be summed, sorted or filtered, which is the only reason to open
+the file. So the CSV writes `2450.50` and `INR`, and the XLSX — where a value
+can be formatted without being destroyed — writes a number carrying `"₹"#,##0.00`.
+
+Dates follow the same rule: ISO `2026-09-10` in the CSV, because it is the one
+date format every spreadsheet parses identically in every locale, and a real
+date cell in the workbook.
+
+**`Created` stays text in both.** It is a `timestamptz`, and a spreadsheet has
+nowhere to put a zone — converting it would mean silently choosing one. It is
+normalised to UTC ISO 8601 once, in `buildExportRows`, so the two formats
+cannot disagree about when an expense was recorded.
+
+### CSV injection, which is a real risk here rather than a theoretical one
+
+A cell beginning `=`, `+`, `-`, `@`, a tab or a carriage return is a formula to
+Excel, LibreOffice and Sheets. That matters in *this* application specifically
+because expenses are shared: a group member chooses their own item names and
+notes, and the admin is the one who opens the export. A note beginning `=` is a
+cell that would be evaluated in somebody else's spreadsheet.
+
+Text columns are prefixed with an apostrophe, which both applications treat as
+"the rest is literal" and neither displays. It is applied only to text columns
+— an amount is written by the application, never by a user, and prefixing it
+would break the number it is meant to be. The XLSX needs none of this, for the
+reason above.
+
+The suite proves both ends: `=SUM(A1:A9)` comes back from the CSV as
+`'=SUM(A1:A9)`, and reaches the sheet as an `inlineStr` cell in a workbook
+containing no `<f>` element at all.
+
+### The filename says what, when, and what it is
+
+`goa-trip-september-2026-expenses.csv` — §25's example, and the shape it
+implies: the scope, then the period, then the noun. A folder of these sorts
+sensibly and each says what it holds without being opened.
+
+The period is read back from whichever control set the scope, so the file is
+named after the *view* it was downloaded from rather than after the query:
+
+| Scope on screen | Filename |
+| --- | --- |
+| A month | `goa-trip-september-2026-expenses.csv` |
+| A date range | `personal-2026-09-10-to-2026-09-20-expenses.csv` |
+| One open end | `personal-from-2026-09-01-expenses.csv` |
+| All time | `personal-all-time-expenses.csv` |
+
+The result is restricted to `[a-z0-9-]` and one dot. That is a convenience —
+nothing to quote, nothing a filesystem objects to — and it also closes the
+header-injection question for free: after slugging, a group name has no quote,
+newline or semicolon left to break out of the `Content-Disposition` value with,
+so the header cannot be forged through a group's name. Accents are decomposed
+rather than stripped, so "Café" is `cafe` and not `caf`; a name that slugs to
+nothing at all falls back rather than producing a file called `-expenses.csv`.
+
+### Reading the rows: chunked, capped, and loud about the cap
+
+`readAll` pages in chunks of 1,000 rather than asking for everything at once.
+PostgREST can be configured with a maximum rows per response, and a silently
+short answer would be an export missing expenses with nothing about the file
+saying so. Paging explicitly means the result does not depend on that setting.
+
+Above 10,000 rows the route stops and returns a 413 with a plain sentence
+asking the person to narrow to a month or a shorter range. **A hard stop rather
+than a silent truncation** is the point: a file quietly missing December is
+worse than no file, because nothing about it says so. §25 is about a selected
+month, and a month above this figure is not a real month — so the limit should
+be unreachable in practice, and actionable when it is not.
+
+The message is plain text rather than a toast because of where it arrives: the
+browser is following a download link, so there is no page waiting to receive
+one.
+
+### The toast says what is actually known
+
+§2 lists "Export completed" among the toasts. A browser does not tell a page
+when it has finished saving a file, so the toast says "Your CSV export is
+downloading" — which is true at the moment it fires. Claiming completion would
+have been the more confident sentence and the less accurate one.
+
+### Authorization is stated twice, and enforced somewhere else entirely
+
+A route handler is not a page, so nothing gates it by default. Both routes call
+`requireUser()` themselves; the proxy's redirect covers `/api/` too, but that
+is an optimistic check for navigation and not something a data route should
+lean on.
+
+Neither check is what actually confines the rows. RLS returns a user only their
+own personal expenses and a group's expenses only to its members, so an export
+cannot reach a row its list could not — which is why the suite asks the
+question against PostgREST directly as well as through the route.
+
+The one authorization decision left is the group export's, and it is the same
+one the group pages make: no detail row back means either no such group or not
+a member, and both answer 404. Telling the two apart would confirm a group's
+existence to somebody with no business knowing it.
+
+`Cache-control: private, no-store` is on every export response. An export is
+somebody's private spending, served over a plain GET whose URL carries the
+filters; nothing between the server and the browser should keep a copy.
+
+### Testing — `scripts/verify-export.mjs`, `npm run verify:export`
+
+52 checks, all passing, over three surfaces:
+
+| Section | What it covers |
+| --- | --- |
+| Nothing to export | An empty list offers no export links at all |
+| Seeding | Three personal expenses over two months, a EUR group with a second member, and a row carrying a formula, a comma, a quote, an ampersand, an angle bracket and an accent |
+| The export controls | Both formats offered, links carrying the filters in force, a group's own links |
+| The CSV file | Headers, disposition, `no-store`, BOM bytes, CRLF, the nine columns in order, oldest-first ordering, every cell's value, plain numeric amounts, blank cells for unrecorded fields, an awkward round trip, formula neutralisation |
+| The Excel file | A real ZIP with the six parts, the same nine headers, numeric amount cells, date cells at the right serials, the currency format code per currency, a formula as `inlineStr` with no `<f>` anywhere, escaped text, the sheet name |
+| The filename | Month, group slug, a previous month, all-time, a date range, the extension |
+| The export is the list | Month scope, an empty month, a search, a payment mode, an inclusive date range, an unreadable filter, a group's members and currency |
+| An export never widens what is readable | Signed-out on both routes, a stranger's empty export, five filter combinations that return nothing, a non-member's 404, a missing group's 404, a member's group export, a member's personal export, and two direct PostgREST attempts |
+
+The last section is the one that matters. An export is a new way to ask the
+database for rows, and the claim being tested is that it is not a way to ask a
+*wider* question than the list it came from.
+
+**The XLSX is read back by a ZIP reader written inside the suite**, from the
+format's own description, working backwards from the end-of-central-directory
+record the way any reader does. That is deliberate: a file only its own writer
+can open is not evidence of anything. The CSV gets the same treatment — a real
+RFC 4180 parser rather than a split on commas, because half the point of the
+writer is that a note containing a comma, a quote or a newline survives, and a
+naive parser would happily agree with a broken writer.
+
+Independently of the suite, the generated workbook was verified with two
+outside readers — `unzip -t`, which checks every CRC, and Python's `zipfile`,
+whose `testzip()` returned clean — and each of the six parts was confirmed to
+parse as well-formed XML.
+
+### One harness bug found, and it was the test's
+
+`hasLink` matched `href="..."` against the rendered markup, and every earlier
+assertion had passed because those links carried a single parameter. The first
+two-parameter link failed: React writes an ampersand in an attribute as
+`&amp;`, so a link with two parameters is never in the markup in the form it
+was written in. The expected href is now entity-encoded before matching.
+
+The application was right; the assertion was reading the markup naively. This
+is the same class of mistake Phase 9 recorded about matching page-wide strings,
+and it is worth noting that it surfaced immediately rather than after a false
+pass — the check was specific enough to be wrong out loud.
+
+### Checks run
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | succeeds, 24 routes (22 before, plus the two export routes) |
+| `npm run verify:export` | 52 passed, 0 failed |
+| `npm run verify:search` | 50 passed, 0 failed |
+| `npm run verify:expenses` | 41 passed, 0 failed |
+| `npm run verify:group-expenses` | 54 passed, 0 failed |
+| `npm run verify:dashboards` | 51 passed, 0 failed |
+| `npm run verify:budgets` | 57 passed, 0 failed |
+| `npm run verify:groups` | 71 passed, 0 failed |
+| `npm run db:verify-rls` | 77 passed, 0 failed |
+
+453 checks across the eight suites, none failing. Every earlier suite passed
+first time — this phase adds routes and a library rather than changing any page
+those suites read, and the export links sit in a row that did not exist for
+them to match against.
+
+### An environment note, not a code one
+
+The build failed once with `ENOSPC: no space left on device` — the machine's
+disk was at 100% of 113 GiB with 26 MiB free. Nothing to do with this phase.
+`.next/` was cleared and the npm download cache (6.8 GiB, purely regenerable)
+was emptied with `npm cache clean --force`, which freed enough to continue. It
+is worth knowing the disk is close to full: the dev server running at the time
+was corrupted by the cleanup and had to be restarted, and its first suite run
+reported 41 spurious failures that were entirely the broken server.
+
+### Decisions worth knowing
+
+- **One filter language, three readers.** The export reuses
+  `ExpenseFilters`, `parseExpenseFilters` and `applyExpenseFilters` unchanged.
+  No new query surface was added, and none was needed.
+- **The export is a link.** Shareable, repeatable, works without JavaScript,
+  and the back button behaves. The client component exists only for the toast.
+- **A real XLSX, no dependency.** Two stable formats, ~350 lines, verified by
+  outside readers.
+- **Types beat formatting where they conflict.** A number that can be summed is
+  worth more than a string that looks right, so the CSV is machine-readable and
+  the workbook is both.
+- **A blank cell means "not recorded".** Not "Uncategorised", which would be
+  indistinguishable from a category somebody genuinely named that.
+- **The file is ordered oldest first**, unlike the list. A screen shows the
+  newest first because that is what someone opening a page wants; a file is a
+  document, and a statement reads forwards.
+- **Too large is a message, not a truncation.** Silently dropping rows from a
+  financial export is the one failure mode worth being loud about.
+- **The export links appear only when there is something to export**, matching
+  how the filter bar behaves — but they stay while a filter is active, even one
+  matching nothing, so a header-only file is reachable rather than a dead end.
+
+### Deliberately not done in this phase
+
+PDF export. The registry is shaped for it and §25 only asks that it be possible
+later.
+
+The export is not offered on the dashboards. §25 is about downloading
+expenses, the expense lists are where the filters and the month scope live, and
+both dashboards already link through to the list carrying their month — so the
+route from "I am looking at September" to "give me September" is two clicks
+rather than none, and there is no second copy of the control to keep in step.
+
+No emailed or scheduled exports, no export history, and no server-side
+retention: a file is built per request and never stored. Nothing about an
+expense that §25 does not list was added to the columns, including the internal
+ids — a person opening this file wants their spending, not the database's
+primary keys.
 
 ---
 

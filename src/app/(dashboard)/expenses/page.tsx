@@ -8,6 +8,7 @@ import { ExpenseFilterBar } from "@/components/expenses/expense-filters";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { ExpensePagination } from "@/components/expenses/expense-pagination";
 import { ExpenseScopeNav } from "@/components/expenses/expense-scope-nav";
+import { ExportMenu } from "@/components/expenses/export-menu";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -32,6 +33,9 @@ export const metadata: Metadata = {
 };
 
 const BASE_PATH = "/expenses";
+
+/** The download route. Takes the same filters the list is showing (§25). */
+const EXPORT_PATH = "/api/expenses/export";
 
 function pageNumber(value: string | string[] | undefined): number {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -95,7 +99,10 @@ export default async function ExpensesPage(props: PageProps<"/expenses">) {
           clearing one would mean going back rather than pressing "Clear". */}
       {total > 0 || filtered ? (
         <>
-          <ExpenseScopeNav basePath={BASE_PATH} filters={filters} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ExpenseScopeNav basePath={BASE_PATH} filters={filters} />
+            <ExportMenu basePath={EXPORT_PATH} filters={filters} />
+          </div>
           <ExpenseFilterBar
             basePath={BASE_PATH}
             filters={filters}

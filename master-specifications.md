@@ -2355,7 +2355,7 @@ Implement:
 
 Implement:
 
-* Monthly CSV export
+* Monthly CSV and excel export
 * Proper filename
 * Correct currency/date formatting
 
