@@ -74,58 +74,6 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
       />
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users aria-hidden className="size-4 text-muted-foreground" />
-            Members
-          </CardTitle>
-          <CardDescription>
-            {members.length} {members.length === 1 ? "person" : "people"} can see
-            and add this group&rsquo;s expenses.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <MemberList
-            groupId={group.id}
-            members={members}
-            isAdmin={isAdmin}
-            adminCount={adminCount}
-          />
-        </CardContent>
-      </Card>
-
-      {isAdmin ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MailPlus aria-hidden className="size-4 text-muted-foreground" />
-              Invite people
-            </CardTitle>
-            <CardDescription>
-              The invitation appears in their Spendora invitations, to accept or
-              decline. Nothing in this group is visible to them until they
-              accept. Someone without an account yet gets a link instead.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <InviteForm action={inviteMember.bind(null, group.id)} />
-
-            {invitations.length > 0 ? (
-              <div>
-                <h3 className="mb-1 text-sm font-medium">
-                  Pending invitations
-                </h3>
-                <InvitationList
-                  groupId={group.id}
-                  invitations={invitations}
-                />
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
         <CardHeader className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2">
@@ -180,6 +128,58 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
               </Link>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {isAdmin ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MailPlus aria-hidden className="size-4 text-muted-foreground" />
+              Invite people
+            </CardTitle>
+            <CardDescription>
+              The invitation appears in their Spendora invitations, to accept or
+              decline. Nothing in this group is visible to them until they
+              accept. Someone without an account yet gets a link instead.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-5">
+            <InviteForm action={inviteMember.bind(null, group.id)} />
+
+            {invitations.length > 0 ? (
+              <div>
+                <h3 className="mb-1 text-sm font-medium">
+                  Pending invitations
+                </h3>
+                <InvitationList
+                  groupId={group.id}
+                  invitations={invitations}
+                />
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users aria-hidden className="size-4 text-muted-foreground" />
+            Members
+          </CardTitle>
+          <CardDescription>
+            {members.length} {members.length === 1 ? "person" : "people"} can see
+            and add this group&rsquo;s expenses.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <MemberList
+            groupId={group.id}
+            members={members}
+            isAdmin={isAdmin}
+            adminCount={adminCount}
+          />
         </CardContent>
       </Card>
 
