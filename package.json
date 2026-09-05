@@ -9,6 +9,7 @@
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "typecheck": "next typegen && tsc --noEmit",
+    "test": "node scripts/test.mjs",
     "db:verify-rls": "node scripts/verify-rls.mjs",
     "verify:expenses": "node scripts/verify-expenses.mjs",
     "verify:groups": "node scripts/verify-groups.mjs",

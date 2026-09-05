@@ -10,7 +10,11 @@ Pick whichever suits you — all three run the same SQL.
 **Supabase dashboard (quickest).** Open the project → SQL Editor → paste the
 contents of each unapplied file in numeric order → Run.
 
-**psql.** Use the connection string from Project Settings → Database:
+**psql.** Use the connection string from Project Settings → Database. If the
+password contains `@`, `:`, `/`, `?`, `#`, `[` or `]`, percent-encode it first
+(`@` is `%40`) — libpq splits the URL at the first `@`, so an unencoded one in
+the password is read as the start of the hostname and the connection fails with
+`could not translate host name`:
 
 ```bash
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0001_profiles.sql

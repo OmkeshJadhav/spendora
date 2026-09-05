@@ -7,6 +7,7 @@ import { applyExpenseFilters } from "@/lib/expenses/filter-query";
 import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
 import { isUuid } from "@/lib/ids";
 import { sumAmounts } from "@/lib/money";
+import { readAllRows } from "@/lib/supabase/paged";
 import { createClient } from "@/lib/supabase/server";
 import type { Category, Expense } from "@/types";
 
@@ -120,18 +121,27 @@ export async function listPersonalExpenses({
   }
 
   // Summed from its own query rather than from the rows on screen, which are
-  // only one page of what the filters matched.
-  const { data: amounts, error: totalError } = await applyExpenseFilters(
-    supabase
-      .from("expenses")
-      .select("amount")
-      .eq("user_id", user.id)
-      .is("group_id", null),
-    filters,
+  // only one page of what the filters matched — and read in chunks, because an
+  // unbounded request stops at PostgREST's row ceiling and would make the
+  // total quietly short. See `lib/supabase/paged`.
+  const { rows: amounts, error: totalError } = await readAllRows((from, to) =>
+    applyExpenseFilters(
+      supabase
+        .from("expenses")
+        .select("amount")
+        .eq("user_id", user.id)
+        .is("group_id", null),
+      filters,
+    )
+      // `id` is unique, so this order is total — which is what makes paging
+      // safe. `expense_date` leads so the partial index can serve it.
+      .order("expense_date", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to),
   );
 
   if (totalError) {
-    failed("listTotal", totalError.message);
+    failed("listTotal", totalError);
   }
 
   const total = count ?? 0;

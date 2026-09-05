@@ -11,6 +11,7 @@ import { ownerColumn, type CategoryOwner } from "@/lib/categories/owner";
 import { listOwnerCategories, type CategorySummary } from "@/lib/categories/queries";
 import { monthRange, monthStartIso, type IsoDate } from "@/lib/dates";
 import { sumAmounts, toMinorUnits } from "@/lib/money";
+import { readAllRows } from "@/lib/supabase/paged";
 import { createClient } from "@/lib/supabase/server";
 import type { MonthKey } from "@/types";
 
@@ -68,26 +69,34 @@ async function spendByCategory(
   const { start, end } = monthRange(month);
   const { column, value } = ownerColumn(owner);
 
-  let query = supabase
-    .from("expenses")
-    .select("amount, category_id")
-    .eq(column, value)
-    .gte("expense_date", start satisfies IsoDate)
-    .lte("expense_date", end satisfies IsoDate);
+  // Chunked, because this is a total: an unbounded request stops at
+  // PostgREST's row ceiling, and every figure on both dashboards is derived
+  // from these rows. See `lib/supabase/paged`.
+  const { rows, error } = await readAllRows((from, to) => {
+    let query = supabase
+      .from("expenses")
+      .select("amount, category_id")
+      .eq(column, value)
+      .gte("expense_date", start satisfies IsoDate)
+      .lte("expense_date", end satisfies IsoDate);
 
-  // A personal expense is one with no group. Without this, a user's group
-  // expenses would count against their private budgets.
-  if (owner.kind === "personal") {
-    query = query.is("group_id", null);
-  }
+    // A personal expense is one with no group. Without this, a user's group
+    // expenses would count against their private budgets.
+    if (owner.kind === "personal") {
+      query = query.is("group_id", null);
+    }
 
-  const { data, error } = await query;
+    // `id` is unique, so this order is total — which is what makes paging safe.
+    return query
+      .order("expense_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+  });
 
   if (error) {
-    failed("spendByCategory", error.message);
+    failed("spendByCategory", error);
   }
 
-  const rows = data ?? [];
   const totals = new Map<string | null, number>();
 
   for (const row of rows) {
@@ -153,7 +162,9 @@ async function effectiveBudgets(
 }
 
 /**
- * Everything the budgets view needs for one month, in three queries.
+ * Everything the budgets view needs for one month, in three reads, run
+ * together. The spending read pages when a month is busy enough to need it, so
+ * "three" is the floor rather than a promise.
  *
  * Rows are ordered by need rather than by name: over budget first, then
  * nearing it, then the rest — so the categories that want attention are the

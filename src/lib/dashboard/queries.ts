@@ -27,6 +27,7 @@ import {
   type PersonalExpense,
 } from "@/lib/expenses/queries";
 import { toMinorUnits } from "@/lib/money";
+import { readAllRows } from "@/lib/supabase/paged";
 import { createClient } from "@/lib/supabase/server";
 import type { MonthKey } from "@/types";
 
@@ -85,28 +86,38 @@ export async function monthlyTrend(
   const start = monthRange(first).start;
   const end = monthRange(month).end;
 
-  let query = supabase
-    .from("expenses")
-    .select("amount, expense_date")
-    .eq(column, value)
-    .gte("expense_date", start satisfies IsoDate)
-    .lte("expense_date", end satisfies IsoDate);
+  // Chunked: this covers six months at once, so it is the widest read in the
+  // application and the first an unbounded request would truncate — leaving a
+  // trend that slopes for a reason that is not spending. See
+  // `lib/supabase/paged`.
+  const { rows, error } = await readAllRows((from, to) => {
+    let query = supabase
+      .from("expenses")
+      .select("amount, expense_date")
+      .eq(column, value)
+      .gte("expense_date", start satisfies IsoDate)
+      .lte("expense_date", end satisfies IsoDate);
 
-  // A personal expense is one with no group. Without this, a user's group
-  // spending would appear on their private trend.
-  if (owner.kind === "personal") {
-    query = query.is("group_id", null);
-  }
+    // A personal expense is one with no group. Without this, a user's group
+    // spending would appear on their private trend.
+    if (owner.kind === "personal") {
+      query = query.is("group_id", null);
+    }
 
-  const { data, error } = await query;
+    // `id` is unique, so this order is total — which is what makes paging safe.
+    return query
+      .order("expense_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+  });
 
   if (error) {
-    failed("monthlyTrend", error.message);
+    failed("monthlyTrend", error);
   }
 
   const buckets = new Map<string, { total: number; count: number }>();
 
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const key = row.expense_date.slice(0, 7);
     const bucket = buckets.get(key) ?? { total: 0, count: 0 };
 
@@ -145,23 +156,32 @@ export async function memberSpending(
   const supabase = await createClient();
   const { start, end } = monthRange(month);
 
-  const [{ data, error }, names] = await Promise.all([
-    supabase
-      .from("expenses")
-      .select("amount, paid_by")
-      .eq("group_id", groupId)
-      .gte("expense_date", start satisfies IsoDate)
-      .lte("expense_date", end satisfies IsoDate),
+  // Chunked for the same reason as every other total here: a short read would
+  // understate somebody's share without saying so, and this is the figure a
+  // settlement would later be computed from.
+  const [{ rows, error }, names] = await Promise.all([
+    readAllRows((from, to) =>
+      supabase
+        .from("expenses")
+        .select("amount, paid_by")
+        .eq("group_id", groupId)
+        .gte("expense_date", start satisfies IsoDate)
+        .lte("expense_date", end satisfies IsoDate)
+        // `id` is unique, so this order is total.
+        .order("expense_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
     memberNames(groupId),
   ]);
 
   if (error) {
-    failed("memberSpending", error.message);
+    failed("memberSpending", error);
   }
 
   const paid = new Map<string, { total: number; count: number }>();
 
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const bucket = paid.get(row.paid_by) ?? { total: 0, count: 0 };
 
     bucket.total += toMinorUnits(row.amount);

@@ -4,12 +4,30 @@ A monthly expense tracker for personal and shared spending. Record expenses,
 organise them into groups with per-category monthly budgets, and see where the
 money went — month by month.
 
-> **Status:** in development. Phases 1-10 are complete — authentication,
+> **Status:** MVP complete. All thirteen phases have shipped — authentication,
 > personal and group expenses, groups and in-app invitations, categories and
-> budgets, dashboards, search, filters and history, and CSV/Excel export. UI
-> polish and the security audit land in later phases. See
-> [`project-progress.md`](./project-progress.md) for what exists today and
+> budgets, dashboards, search, filters and history, CSV/Excel export, UI
+> polish, a security audit, and the production-readiness review. See
+> [`project-progress.md`](./project-progress.md) for what exists today and how
+> each decision was reached, and
 > [`master-specifications.md`](./master-specifications.md) for the full plan.
+
+## What it does
+
+- **Personal expenses** — private to the person who recorded them. Item,
+  amount, date, category, payment mode and notes; create, edit and delete.
+- **Groups** — a name, a currency, and members with admin or member roles.
+  Admins invite by email address; invitations are answered inside the
+  application, and email is only how one reaches somebody without an account.
+- **Group expenses** — recorded against the group's currency, with any member
+  selectable as the payer.
+- **Categories and monthly budgets** — per group or per person, with budget
+  versus actual, remaining, and utilisation.
+- **Dashboards** — monthly summary, category breakdown, six-month trend, and,
+  for a group, spending by member.
+- **History, search and filters** — a month selector across every view, and
+  filtering by category, payer, payment mode, date range and free text.
+- **Export** — the month you are looking at, as CSV or XLSX.
 
 ## Tech stack
 
@@ -24,15 +42,16 @@ money went — month by month.
 | Notifications | Sonner (toasts)                                      |
 | Validation    | Zod                                                  |
 | Database/auth | Supabase (PostgreSQL, Auth, Row Level Security)     |
-| Email         | Resend — planned                                     |
+| Email         | Resend, behind a provider-agnostic service            |
 | Linting       | ESLint (flat config, `eslint-config-next`)           |
 
 ## Prerequisites
 
 - Node.js 20.9 or newer (developed on Node 22)
 - npm 10 or newer
-- A Supabase project (needed from Phase 2 onwards)
-- A Resend account (needed for group invitation emails, Phase 5)
+- A Supabase project
+- A Resend account — optional; only for mailing invitations to people who
+  do not have an account yet
 
 ## Installation
 
@@ -48,12 +67,21 @@ Copy the example file and fill in your own values:
 cp .env.example .env.local
 ```
 
-| Variable                        | Scope   | Purpose                                              |
-| ------------------------------- | ------- | ---------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`      | Browser | Supabase project URL                                 |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser | Supabase anon key (public by design; RLS protects data) |
-| `EMAIL_API_KEY`                 | Server  | Email provider API key — never exposed to the browser |
-| `EMAIL_FROM`                    | Server  | Sender address for invitation emails                 |
+| Variable                        | Scope     | Required | Purpose |
+| ------------------------------- | --------- | -------- | ------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Browser   | Yes      | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser   | Yes      | Supabase anon key (public by design; RLS protects data) |
+| `EMAIL_API_KEY`                 | Server    | No       | Resend API key — never exposed to the browser |
+| `EMAIL_FROM`                    | Server    | No       | Sender address for invitation emails |
+| `APP_ORIGIN`                    | Server    | No       | Canonical origin for links inside emails. Set it in production, so a spoofed `Host` header cannot rewrite them |
+| `SUPABASE_SERVICE_ROLE_KEY`     | Test only | No       | Lets the test suites create and delete throwaway accounts. Never read by application code |
+| `BASE_URL`                      | Test only | No       | Where the suites find the running app (default `http://localhost:3000`) |
+| `SUPABASE_DB_URL`               | Tooling   | No       | Connection string for applying migrations with `psql` |
+
+Leaving `EMAIL_API_KEY` and `EMAIL_FROM` blank is a supported configuration,
+not a broken one: invitations are answered in the application, so without a
+provider they are still created and the admin is shown the one-time link to
+pass on by hand.
 
 `.env.local` is git-ignored. Only `.env.example` is committed, and it never
 contains real values. Variables are read through
@@ -86,9 +114,23 @@ another user's rows.
 
 ## Email setup
 
-Not yet wired up. Phase 5 adds a provider-agnostic service under `src/lib/email`
-so the provider can be swapped without touching calling code. All sending
-happens server-side.
+Two different senders are involved, and only one of them is this application's.
+
+**Invitation mail** goes through `src/lib/email/`, which wraps
+[Resend](https://resend.com) behind a small interface so the provider can be
+replaced without touching calling code. Sending happens server-side only. Set
+`EMAIL_API_KEY` and an `EMAIL_FROM` on a domain verified with the provider —
+unverified, Resend refuses every recipient but your own address.
+
+It is optional. With no key, or when the provider refuses a message, the
+invitation is still created, still appears in the invitee's in-app
+invitations, and the admin is shown its one-time link to pass on. A failed
+send never takes down the action that triggered it, and a raw provider error is
+never shown to a user.
+
+**Sign-up confirmation mail is sent by Supabase**, not by this application,
+through whatever SMTP the project is configured with. `EMAIL_API_KEY` has no
+bearing on it. See [`supabase/README.md`](./supabase/README.md).
 
 ## Development
 
@@ -105,6 +147,24 @@ npm run build
 npm start
 ```
 
+Before deploying, check the four things that differ from development:
+
+1. **`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` must be set
+   at build time**, not only at runtime — Next.js inlines `NEXT_PUBLIC_*` into
+   the client bundle while building. Missing, they fail loudly on the first
+   request rather than silently.
+2. **Set `APP_ORIGIN`** to the deployed origin, so a link inside an invitation
+   email cannot be rewritten by a spoofed `Host` header.
+3. **Point Supabase at that origin too** — Authentication → URL Configuration —
+   or confirmation links come back to `localhost`.
+4. **Do not set `SUPABASE_SERVICE_ROLE_KEY` in the deployed environment.** No
+   application code reads it; only the test suites do. A production process
+   that does not hold it cannot leak it.
+
+Response security headers (`frame-ancestors`, `nosniff`, `Referrer-Policy`,
+`Permissions-Policy`, HSTS) are set for every route in
+[`next.config.ts`](./next.config.ts), and `X-Powered-By` is off.
+
 ## Checks
 
 ```bash
@@ -112,6 +172,7 @@ npm run lint       # ESLint
 npm run lint:fix   # ESLint with autofix
 npm run typecheck  # Generates route types, then tsc --noEmit
 npm run build      # Full production build
+npm test           # Every end-to-end suite (see Testing, below)
 ```
 
 ## Testing
@@ -122,11 +183,16 @@ forms, including the no-JavaScript path — and also query PostgREST directly
 with each user's own JWT, so authorization claims are proved against the
 database rather than against the absence of a link.
 
-Start the app first, then run a suite:
+Start the app first, then run everything:
 
 ```bash
-npm run dev                    # in another terminal
+npm run dev   # in another terminal
+npm test      # all nine suites, in order, stopping at the first failure
+```
 
+Or one suite at a time, which is what a normal edit-and-check loop wants:
+
+```bash
 npm run db:verify-rls          # row-level security policies
 npm run verify:expenses        # personal expenses
 npm run verify:groups          # groups and invitations
@@ -136,13 +202,19 @@ npm run verify:dashboards      # personal and group dashboards
 npm run verify:search          # search, filters and history
 npm run verify:export          # CSV and Excel export
 
-npm run audit:security         # the security audit (Phase 12)
+npm run audit:security         # the security audit
 ```
+
+`npm test` is a runner, not a framework — it invokes exactly the suites above,
+in the order they were built, and stops at the first failure because everything
+after one is either a consequence of it or noise.
 
 Each suite creates throwaway accounts and deletes them at the end, even on
 failure. They need `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` for that, and
 run against `http://localhost:3000` unless `BASE_URL` says otherwise. Because
-every page is compiled on demand under `next dev`, a full pass is slow.
+they write and delete real rows, **point them at a test project**, not one
+holding real people's expenses. Because every page is compiled on demand under
+`next dev`, a full pass is slow.
 
 ### The security audit
 
@@ -166,18 +238,27 @@ accounts; the code under test never sees it.
 src/
 ├── app/
 │   ├── (auth)/         # Sign in, sign up — public
-│   ├── (dashboard)/    # Dashboard, settings — requires a session
+│   ├── (dashboard)/    # Every private page, behind one layout
+│   ├── api/            # Export route handlers
 │   ├── auth/confirm/   # Verifies emailed one-time links
 │   └── ...             # Root layout, error/loading/not-found UI
 ├── components/
-│   └── ui/             # Reusable presentational primitives
+│   ├── ui/             # Reusable presentational primitives
+│   ├── budgets/  categories/  charts/  dashboard/
+│   ├── expenses/  groups/     # Feature components
+│   └── ...             # Header, navigation, month picker, toasts
 ├── lib/
 │   ├── auth/           # Data access layer, server actions, error mapping
-│   ├── supabase/       # Request-scoped Supabase clients
+│   ├── budgets/  categories/  dashboard/  expenses/  groups/
+│   │                   # Queries, server actions and pure calculation per area
+│   ├── email/          # Provider-agnostic sending, and the invitation template
+│   ├── export/         # CSV and XLSX writers, filenames, row building
+│   ├── supabase/       # Request-scoped clients, and chunked reads
 │   └── validations/    # Zod schemas shared by client and server
 ├── types/              # Shared value types and the database schema type
 └── proxy.ts            # Session refresh + route protection
 
+scripts/                # End-to-end suites, the security audit, the runner
 supabase/
 └── migrations/         # Numbered, re-runnable SQL
 ```

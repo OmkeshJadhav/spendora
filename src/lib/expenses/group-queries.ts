@@ -8,6 +8,7 @@ import { EMPTY_FILTERS, type ExpenseFilters } from "@/lib/expenses/filters";
 import type { ExpenseCategory } from "@/lib/expenses/queries";
 import { isUuid } from "@/lib/ids";
 import { sumAmounts } from "@/lib/money";
+import { readAllRows } from "@/lib/supabase/paged";
 import { createClient } from "@/lib/supabase/server";
 import type { Expense } from "@/types";
 
@@ -180,17 +181,24 @@ export async function listGroupExpenses(
   }
 
   // The page's rows are not the whole filtered set, so the total is summed
-  // from its own query rather than from what happens to be on screen. This
-  // reads every matching amount, which is fine for one group's expenses; a
-  // database-side aggregate is what the dashboard uses when several such
-  // figures are wanted at once.
-  const { data: amounts, error: totalError } = await applyExpenseFilters(
-    supabase.from("expenses").select("amount").eq("group_id", groupId),
-    filters,
+  // from its own query rather than from what happens to be on screen. Read in
+  // chunks: an unbounded request stops at PostgREST's row ceiling, and a group
+  // that busy is exactly the one whose total must not be short. See
+  // `lib/supabase/paged`.
+  const { rows: amounts, error: totalError } = await readAllRows((from, to) =>
+    applyExpenseFilters(
+      supabase.from("expenses").select("amount").eq("group_id", groupId),
+      filters,
+    )
+      // `id` is unique, so this order is total — which is what makes paging
+      // safe. `expense_date` leads so the partial index can serve it.
+      .order("expense_date", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to),
   );
 
   if (totalError) {
-    failed("listTotal", totalError.message);
+    failed("listTotal", totalError);
   }
 
   const total = count ?? 0;
@@ -234,13 +242,20 @@ export async function listRecentGroupExpenses(
     failed("listRecent", error.message);
   }
 
-  const { data: amounts, error: totalError } = await supabase
-    .from("expenses")
-    .select("amount")
-    .eq("group_id", groupId);
+  // Every expense the group has ever recorded, so this is the least bounded
+  // sum in the application and the first one PostgREST's ceiling would cut.
+  const { rows: amounts, error: totalError } = await readAllRows((from, to) =>
+    supabase
+      .from("expenses")
+      .select("amount")
+      .eq("group_id", groupId)
+      .order("expense_date", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to),
+  );
 
   if (totalError) {
-    failed("recentTotal", totalError.message);
+    failed("recentTotal", totalError);
   }
 
   const [categories, names] = await Promise.all([

@@ -17,7 +17,7 @@ Tracks what has actually been built, phase by phase, against
 | 10    | Export                         | ✅ Complete    |
 | 11    | UI polish                      | ✅ Complete    |
 | 12    | Testing + security audit       | ✅ Complete    |
-| 13    | Production readiness           | ⬜ Not started |
+| 13    | Production readiness           | ✅ Complete    |
 
 > ✅ **No temporary deviations are active.** The email-confirmation bypass that
 > stood from 2 September 2026 was closed on 4 September 2026. See
@@ -3036,6 +3036,357 @@ would be a framework in exchange for a tautology.
 No penetration testing of Supabase itself, no dependency-vulnerability scan,
 and no load testing. The first is the provider's, and the other two belong to
 Phase 13's production review with a lockfile that is about to be deployed.
+
+---
+
+## Phase 13 — Production readiness (complete, 5 September 2026)
+
+Specification §61's Phase 13 is a verification phase rather than a building
+one: run `npm run lint`, `npm run build` and `npm test`, then review
+environment variables, database migrations, RLS, error handling, performance,
+responsive design and the README. "Only consider the MVP complete after all
+checks pass."
+
+Two of the three commands already passed. The third did not exist. And the
+performance review found a bug in every money total the application renders —
+introduced with the budget overview in Phase 7, inherited by the dashboards in
+Phase 8 and by the list totals in Phase 9, and silent throughout, which is why
+554 checks across twelve phases had never caught it.
+
+### `npm test` did not exist
+
+Twelve phases had shipped nine suites — 554 checks — and every one of them was
+its own npm script. `npm test` was not among them, which meant the command
+§61 actually names could not be run, and running "the tests" meant remembering
+nine script names and the order they go in.
+
+`scripts/test.mjs` is that entry point. It is a **runner, not a framework**:
+it invokes exactly the suites that already existed, in the order they were
+built, and adds no new assertions of its own. Adding Vitest or Jest here would
+have been a dependency in exchange for a wrapper.
+
+Three things it does that running nine commands by hand does not:
+
+| Behaviour | Why |
+| --------- | --- |
+| Checks the environment and the running app **once, up front** | Without them every suite fails identically. One clear message beats nine copies of it |
+| **Stops at the first failing suite** | Everything after a broken schema is either a consequence of it or noise |
+| Prints a per-suite `pass`/`FAIL`/`skip` summary | The scroll-back from a full pass is thousands of lines |
+
+It exits non-zero if any suite does, so it works in CI unchanged.
+
+### The finding: every money total stopped at 1000 rows
+
+**Severity: high. Fixed.**
+
+This is the whole of §61's "Performance" review, and it turned out not to be a
+performance question at all.
+
+Every total in the application was computed the same way: fetch every matching
+row, add the amounts up in JavaScript. `lib/money` even says so — *"Aggregates
+over large sets still belong in SQL; these helpers serve one user's month."*
+What none of it accounted for is that PostgREST answers an unbounded request
+with at most `db-max-rows` rows, and reports the truncation only in a header
+nobody was reading.
+
+Measured against the real project rather than assumed — 1500 expenses of ₹1,
+then the exact request `lib/expenses/queries.ts` makes:
+
+```text
+inserted:       1500
+Content-Range:  0-999/1500
+rows returned:  1000
+summed total:   1000   (truth: 1500)
+```
+
+The ceiling is 1000. Above it, every figure below was wrong, and nothing said
+so:
+
+| Read | Feeds | Scope, so how quickly it overflows |
+| ---- | ----- | ---------------------------------- |
+| `budgets/queries.ts` → `spendByCategory` | Budget vs actual, remaining, utilisation, **and both dashboards' entire category breakdown** | One owner, one month |
+| `dashboard/queries.ts` → `monthlyTrend` | The six-month expenditure chart | One owner, **six months** — the widest read in the app |
+| `dashboard/queries.ts` → `memberSpending` | Spending by member, and the share percentages | One group, one month |
+| `expenses/queries.ts` → `listPersonalExpenses` | The filtered total above the personal list | One person, **all time** when no month is picked |
+| `expenses/group-queries.ts` → `listGroupExpenses` | The filtered total above the group list | One group, **all time** when no month is picked |
+| `expenses/group-queries.ts` → `listRecentGroupExpenses` | The group page's lifetime total | One group, **every expense it has ever held** |
+
+A wrong number is worse than a missing one. `₹1,000.00` looks like an answer.
+
+**Why the export was immune.** Phase 10 hit this exact ceiling and solved it,
+in one module, for one path — `lib/export/queries.ts` pages explicitly, and
+says why: *"PostgREST can be configured with a maximum number of rows per
+response, and a silently short answer would be an export missing expenses
+without saying so."* That reasoning is not specific to files. It was simply
+never carried across to the figures on screen. In the before/after below, the
+CSV is correct in both columns; it was already right.
+
+**Why not aggregate in SQL.** That is the better fix and remains the scaling
+path, but PostgREST's aggregate functions are disabled on this project:
+
+```text
+GET /rest/v1/expenses?select=amount.sum()
+400  PGRST123  "Use of aggregate functions is not allowed"
+```
+
+Turning them on is a dashboard setting, and a correctness fix that depends on
+somebody having flipped a toggle is the same class of mistake as the
+email-confirmation bypass. Paging needs nothing switched on.
+
+**The fix** is `src/lib/supabase/paged.ts` — `readAllRows()`, one shared
+implementation of "every row this query matches, a chunk at a time", used by
+all six reads. Three details worth stating:
+
+- **Chunks of 1000**, matching PostgREST's own ceiling: a full chunk costs one
+  round trip, and asking for more would not return more.
+- **The query must carry a deterministic order**, and every call site now ends
+  its ordering on `id`. Paging is `LIMIT`/`OFFSET`, and PostgreSQL promises
+  nothing about row order without `ORDER BY` — an unordered page could return
+  a row twice or never, which would be a *worse* bug than the one being fixed,
+  and one no ceiling explains. `expense_date` still leads so the partial
+  indexes from Phase 3 can serve it.
+- **A ceiling that throws rather than truncates.** Above 50,000 rows the read
+  returns an error and the page shows its error boundary. That is deliberate,
+  and it is the same judgement Phase 10 made for exports: a total which is
+  quietly short is worse than no total, because nothing about it says so.
+
+**Proof, end to end through the running application** — one account, 1500
+expenses of ₹1.00, all in September 2026:
+
+| Surface | Before | After | Truth |
+| ------- | ------ | ----- | ----- |
+| `/expenses?month=2026-09` filtered total | ₹1,000.00 | **₹1,500.00** | ₹1,500.00 |
+| `/dashboard?month=2026-09` month summary | ₹1,000.00 | **₹1,500.00** | ₹1,500.00 |
+| CSV export, data rows | 1500 | 1500 | 1500 |
+
+The "before" column is not a recollection: the fix was stashed and the same
+probe re-run against the old code. A test that has not been seen to fail proves
+nothing.
+
+### Environment variables
+
+`.env.example` had drifted. Every variable the code reads was checked against
+it — `grep` for `process.env` across `src/`, `scripts/` and `next.config.ts`
+returns eight names — and two were undocumented: `BASE_URL`, which the suites
+use, and `SUPABASE_DB_URL`, which was mentioned only in passing. It also still
+named three verify scripts when there are nine.
+
+It is now grouped by what happens if you leave a variable out:
+
+| Tier | Variables | Consequence of omitting |
+| ---- | --------- | ----------------------- |
+| Required | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | The application does not run |
+| Optional | `EMAIL_API_KEY`, `EMAIL_FROM`, `APP_ORIGIN` | A stated, supported degradation |
+| Test-only | `SUPABASE_SERVICE_ROLE_KEY`, `BASE_URL` | The suites cannot run; the app is unaffected |
+| Tooling | `SUPABASE_DB_URL` | `psql` migrations are less convenient |
+
+Two things confirmed rather than changed: `.gitignore` ignores `.env*` and
+un-ignores `.env.example`, and `git ls-files` shows no tracked file holding a
+secret. The service role key is read by nothing under `src/` — the README now
+says outright that it should **not** be present in a deployed environment, on
+the grounds that a process which does not hold a secret cannot leak one.
+
+Then checked against the actual build output rather than by reading imports.
+Grepping `.next/static` for each secret's literal value after `npm run build`:
+
+| Value | In the client bundle? |
+| ----- | --------------------- |
+| `SUPABASE_SERVICE_ROLE_KEY` | No |
+| `EMAIL_API_KEY` | No |
+| `SUPABASE_DB_URL` | No |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **No** — and this one was expected to be there |
+
+The last row is worth stating. The anon key is public by design and being
+shipped to a browser would have been fine, but it is not shipped, because
+**nothing in this application talks to Supabase from the browser**. There is no
+`createBrowserClient` anywhere, `src/lib/supabase/` holds only a server client,
+and no `"use client"` file imports Supabase at all — every read goes through a
+Server Component and every write through a Server Action. That was never
+declared as a goal in any phase; it is what the architecture happened to
+produce, and it means the browser is handed no database credential of any
+kind.
+
+### Database migrations
+
+The claim in `supabase/README.md` is that every migration is re-runnable.
+Audited statement by statement, it holds:
+
+| Statement kind | How it is made repeatable |
+| -------------- | ------------------------- |
+| `create table`, `create index` | `if not exists` |
+| `create function`, `create trigger` | `or replace` |
+| `create policy` (28 of them) | Preceded by a matching `drop policy if exists` — Postgres has no `if not exists` here, and the counts pair exactly in all five files |
+| `alter table … add constraint` | Preceded by `drop constraint if exists` |
+| `enable row level security` | A no-op when already enabled |
+| The one top-level `insert` (0001's profile backfill) | `on conflict (id) do nothing` |
+
+**Then re-applied, and diffed.** All five files were run in order against the
+live project with `ON_ERROR_STOP=1`, and a full catalogue snapshot was taken
+before and after — every policy, function, trigger, index, constraint and
+`relrowsecurity` flag in `public`, each definition reduced to an md5 so a
+changed body cannot hide behind an unchanged name:
+
+| | Result |
+| --- | ------ |
+| Files applied | 5 of 5, in order, no errors |
+| Catalogue objects before | 161 — 28 policies, 25 functions, 21 triggers, 29 indexes, 51 constraints, 7 tables with RLS |
+| Catalogue objects after | 161, **byte-identical** — `diff` reports no change to any definition hash |
+| `npm run db:verify-rls` afterwards | 77 passed, 0 failed |
+
+Every message psql emitted was a `NOTICE: … already exists, skipping`. That is
+the claim in `supabase/README.md` demonstrated rather than asserted: applying
+the same file twice is safe, and a project that already has the schema ends up
+with exactly the schema it started with.
+
+**One data change, and it was the point of the statement that caused it.**
+`profiles` went from 2 rows to 24. 0001 ends with a backfill —
+*"Anyone who signed up before this migration existed has no profile, and the
+application would treat them as broken"* — and it found 22 accounts in that
+state. All 22 are `spendora+…@example.test` throwaway accounts created by the
+suites on 3-4 September whose `auth.users` row outlived its profile, so the
+database had been sitting in exactly the inconsistency the backfill exists to
+repair. Nothing else moved: groups, members, invitations, categories, budgets
+and expenses are unchanged, and no `auth.users` row was created or deleted.
+
+Those 22 accounts are stale test residue rather than people, and deleting them
+is a separate decision from applying a migration, so they were left in place.
+
+**One finding, in the tooling rather than the SQL.** `supabase/README.md`
+documents `psql "$SUPABASE_DB_URL" -f …`, and that command does not work with
+the value currently in `.env.local`: the password contains an unencoded `@`, and
+libpq splits the URL at the *first* `@`, so it reads the tail of the password as
+the hostname:
+
+```text
+psql: error: could not translate host name "…@db.<ref>.supabase.co" to address
+```
+
+The re-application above therefore went through psql with the components passed
+separately rather than as a URL. The fix is the person's, not the repository's
+— percent-encode the password (`@` is `%40`) — so both `.env.example` and
+`supabase/README.md` now warn about it rather than the next person losing an
+afternoon to it. Nothing in `.env.local` was edited. Note that this affects only
+the `psql` route; the dashboard SQL editor and the Supabase CLI are unaffected,
+which is why five migrations had been applied successfully without anyone
+hitting it.
+
+### RLS, error handling, responsive design
+
+Reviewed and unchanged — this phase found nothing to fix in any of the three,
+and says so rather than inventing work.
+
+**RLS** was not touched. No column, index, constraint, policy or function moved
+in this phase; `supabase/migrations/` is byte-identical to how Phase 12 left
+it. The paging change alters *how many round trips* a read takes, never which
+rows come back — the boundary is the policy, and `db:verify-rls` and
+`audit:security` both re-ran clean against the new code.
+
+**Error handling** already satisfies §28 and §51 at three layers: every query
+module funnels failures through a private `failed()` that logs the technical
+detail server-side and throws user-facing copy; `(dashboard)/error.tsx` keeps
+the header and navigation so a failed page is one click from a working one;
+and `global-error.tsx` renders its own document with inline styles for the case
+where the root layout itself failed. Nothing shows a stack trace, and the
+`digest` is the only thread from a user's screen to a server log. The new
+paging ceiling reports through that same `failed()` path, so it inherits all
+of it rather than adding a fourth kind of error.
+
+**Responsive design** was Phase 11's subject and is unchanged. Re-confirmed:
+the one `<table>` in the application sits in an `overflow-x-auto` wrapper, the
+root layout sets `viewportFit: "cover"` so the mobile bar's safe-area padding
+resolves, and navigation is a bottom bar on mobile rather than a shrunken
+sidebar.
+
+### README
+
+Rewritten where it had gone out of date, which was more of it than expected —
+it still described a project that stopped at Phase 10:
+
+| Was | Now |
+| --- | --- |
+| "Phases 1-10 are complete… UI polish and the security audit land in later phases" | MVP complete, all thirteen phases |
+| "Email: Resend — **planned**" / "Email setup: **Not yet wired up**" | What actually shipped, including that it is optional and what happens without it |
+| Environment table listing 4 of the 8 variables, with no required/optional column | All 8, each with scope and whether it is required |
+| Prerequisites phrased in phase numbers ("needed from Phase 2 onwards") | Plain prerequisites |
+| Project structure showing 3 `lib/` folders of 11 | The tree as it is |
+| No `npm test`; no feature list; no deployment notes | All three added |
+
+The deployment notes are the substantive addition: `NEXT_PUBLIC_*` must exist
+at **build** time because Next inlines it into the client bundle, `APP_ORIGIN`
+should be set so a spoofed `Host` cannot rewrite an emailed link, Supabase's
+URL configuration has to match, and the service role key should be absent.
+
+§53's required sections — overview, tech stack, prerequisites, installation,
+environment, Supabase setup, email setup, development, production build,
+testing — are all present.
+
+### Checks
+
+| Check | Result |
+| ----- | ------ |
+| `npm run lint` | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | succeeds — 24 routes |
+| `npm test` | **9/9 suites passed, 554 checks, 0 failed** (1251s) |
+| `npm run db:verify-rls`, after the migrations were re-applied | 77 passed, 0 failed |
+
+| Suite | Result |
+| ----- | ------ |
+| `db:verify-rls` | 77 passed, 0 failed |
+| `verify:expenses` | 41 passed, 0 failed |
+| `verify:groups` | 71 passed, 0 failed |
+| `verify:group-expenses` | 54 passed, 0 failed |
+| `verify:budgets` | 57 passed, 0 failed |
+| `verify:dashboards` | 51 passed, 0 failed |
+| `verify:search` | 50 passed, 0 failed |
+| `verify:export` | 52 passed, 0 failed |
+| `audit:security` | 101 passed, 0 failed |
+
+Every count matches what Phase 12 recorded, which is the point: the paging fix
+changed how many round trips a read takes and nothing about which rows come
+back.
+
+Every suite was re-run rather than only the ones whose feature changed: the
+paging fix sits under `spendByCategory`, which every dashboard, budget and
+category figure in the application is derived from, and behaviour that is only
+checked by the code that changed it is not checked.
+
+### Files changed
+
+| File | Change |
+| ---- | ------ |
+| `src/lib/supabase/paged.ts` | new — `readAllRows()`, and the measured reason it exists |
+| `src/lib/budgets/queries.ts` | `spendByCategory` pages; stale "in three queries" comment corrected |
+| `src/lib/dashboard/queries.ts` | `monthlyTrend` and `memberSpending` page |
+| `src/lib/expenses/queries.ts` | the personal list's filtered total pages |
+| `src/lib/expenses/group-queries.ts` | both group totals page; drops a comment claiming a database-side aggregate that never existed |
+| `scripts/test.mjs` | new — the `npm test` runner |
+| `package.json` | `test` script |
+| `.env.example` | every variable the code reads, grouped by whether it is required; the `psql` percent-encoding warning |
+| `supabase/README.md` | the same warning, where the `psql` command actually is |
+| `README.md` | status, features, email, environment table, deployment notes, testing, structure |
+
+### Deliberately not done in this phase
+
+**No SQL aggregate functions, and no migration to add one.** It is the right
+long-term answer for `spendByCategory` and would turn six paged reads into six
+single-row ones, but PostgREST rejects aggregates on this project and the
+alternative — a `security invoker` RPC per aggregate — is new SQL touching the
+authorization surface, on the last day before shipping, needing its own RLS
+testing. Paging is correct now and the ceiling it removes was the actual bug.
+
+**No new dependency, no test framework, no CI configuration.** `npm test` runs
+the suites that existed; it does not introduce a runner to run them under.
+
+**No load testing, no dependency-vulnerability scan, no Lighthouse run.**
+Phase 12 deferred the first two here; on inspection they belong to an operating
+deployment rather than to a repository — there is no deployed origin to load or
+audit yet, and inventing figures from a laptop would be theatre.
+
+**No pagination of the group member list or the category list.** Both are
+human-scale and neither sums money, so PostgREST's ceiling is not reachable in
+a real group. Noted rather than fixed, because a limit nobody can hit is a
+limit not worth code.
 
 ---
 
