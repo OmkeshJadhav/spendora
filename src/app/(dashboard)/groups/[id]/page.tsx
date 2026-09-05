@@ -3,6 +3,7 @@ import { LogOut, MailPlus, Plus, ReceiptText, Users } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { AddExpenseFab } from "@/components/expenses/add-expense-fab";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { GroupExpenseActions } from "@/components/expenses/group-expense-actions";
 import { FlashToast } from "@/components/flash-toast";
@@ -74,8 +75,11 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
       />
 
       <Card>
-        <CardHeader className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+        {/* `CardHeader` is `flex-col` by default; the row only turns
+            horizontal at `sm`, which is also where the button replaces the
+            floating one. */}
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <CardTitle className="flex items-center gap-2">
               <ReceiptText aria-hidden className="size-4 text-muted-foreground" />
               Expenses
@@ -89,7 +93,7 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
 
           <Link
             href={`/groups/${group.id}/expenses/new`}
-            className={buttonVariants({ size: "sm" })}
+            className={`${buttonVariants({ size: "sm" })} hidden sm:inline-flex`}
           >
             <Plus aria-hidden />
             Add expense
@@ -204,6 +208,8 @@ export default async function GroupPage(props: PageProps<"/groups/[id]">) {
           />
         )}
       </Card>
+
+      <AddExpenseFab href={`/groups/${group.id}/expenses/new`} />
     </FadeIn>
   );
 }
