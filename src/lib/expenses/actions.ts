@@ -321,9 +321,11 @@ export async function updateExpense(
       })
       .eq("id", id)
       // Scoped to this user's personal rows, so neither another user's expense
-      // nor one of their own group expenses can be edited through this form.
+      // nor one of their own group expenses can be edited through this form —
+      // nor a mirror of one, which follows its group expense (migration 0006).
       .eq("user_id", user.id)
       .is("group_id", null)
+      .is("source_expense_id", null)
       .select("id");
 
     if (error) {
@@ -383,6 +385,7 @@ export async function deleteExpense(
       .eq("id", id)
       .eq("user_id", user.id)
       .is("group_id", null)
+      .is("source_expense_id", null)
       .select("id");
 
     if (error) {

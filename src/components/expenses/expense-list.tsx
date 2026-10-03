@@ -1,4 +1,4 @@
-import { Pencil } from "lucide-react";
+import { Pencil, Users } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -21,7 +21,8 @@ import type { CurrencyCode, PaymentMode } from "@/types";
  * The same component renders personal and group expenses. A group row shows
  * who paid and carries its own actions, because who may edit it depends on the
  * viewer (specification section 9); a personal row is always the viewer's own,
- * so the defaults apply.
+ * so the defaults apply — except a mirror of a group expense the viewer paid,
+ * which names its group and is changed there rather than here.
  */
 
 /** The minimum an expense must carry to be listed. */
@@ -33,7 +34,36 @@ export type ExpenseListRow = {
   payment_mode: PaymentMode | null;
   notes: string | null;
   category: { name: string } | null;
+  /** Set when the row mirrors a group expense (personal lists only). */
+  source_expense_id?: string | null;
+  /** The mirrored expense's group, when the viewer can still read it. */
+  sourceGroup?: { id: string; name: string } | null;
 };
+
+/** Which group a mirrored row came from, linked when it can be opened. */
+function SourceGroupBadge({ expense }: { expense: ExpenseListRow }) {
+  if (!expense.source_expense_id) {
+    return null;
+  }
+
+  const label = (
+    <>
+      <Users aria-hidden className="size-3" />
+      {expense.sourceGroup ? expense.sourceGroup.name : "Group expense"}
+    </>
+  );
+
+  return expense.sourceGroup ? (
+    <Link
+      href={`/groups/${expense.sourceGroup.id}/expenses`}
+      title="Paid by you in this group"
+    >
+      <Badge className="hover:text-foreground">{label}</Badge>
+    </Link>
+  ) : (
+    <Badge title="Paid by you in a group">{label}</Badge>
+  );
+}
 
 function groupByDate<T extends ExpenseListRow>(expenses: T[]): [IsoDate, T[]][] {
   const groups = new Map<IsoDate, T[]>();
@@ -75,6 +105,7 @@ function ExpenseRow({
           ) : (
             <Badge className="text-muted-foreground">Uncategorised</Badge>
           )}
+          <SourceGroupBadge expense={expense} />
         </div>
 
         <p className="mt-1 text-xs text-muted-foreground">
@@ -105,8 +136,16 @@ function ExpenseRow({
   );
 }
 
-/** Edit and delete for a personal expense — always the viewer's own. */
+/**
+ * Edit and delete for a personal expense — always the viewer's own. A mirror
+ * has neither: it follows its group expense, and the database refuses a
+ * direct change to it.
+ */
 function personalActions(expense: ExpenseListRow): ReactNode {
+  if (expense.source_expense_id) {
+    return null;
+  }
+
   return (
     <>
       <Link

@@ -18,18 +18,34 @@ import type { Category, Expense } from "@/types";
  * already restricts the rows. The filters are not the security boundary — they
  * state the intent at the call site and let PostgreSQL use the partial index
  * built for exactly this path.
+ *
+ * "Personal" includes mirrors: a group expense the user paid is copied into
+ * their personal rows by the database (migration 0006), so it counts here
+ * without these queries knowing about groups. Each mirror is labelled with the
+ * group it came from, and cannot be edited from this side.
  */
 
 export const EXPENSES_PER_PAGE = 20;
 
 export type ExpenseCategory = Pick<Category, "id" | "name" | "is_archived">;
 
-/** An expense with its category resolved for display. */
-export type PersonalExpense = Expense & { category: ExpenseCategory | null };
+/** The group a mirrored expense came from. */
+export type SourceGroup = { id: string; name: string };
+
+/** An expense with its category, and for a mirror its group, resolved. */
+export type PersonalExpense = Expense & {
+  category: ExpenseCategory | null;
+  /**
+   * Set when this row mirrors a group expense the user paid. Null for a
+   * mirror whose group the user can no longer read — they left it — which
+   * `source_expense_id` still identifies as one.
+   */
+  sourceGroup: SourceGroup | null;
+};
 
 /** Columns every expense read selects. Listed once so they cannot drift. */
 const EXPENSE_COLUMNS =
-  "id, user_id, group_id, paid_by, category_id, personal_owner_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
+  "id, user_id, group_id, paid_by, category_id, personal_owner_id, source_expense_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
 
 function failed(context: string, message: string): never {
   // Detail stays server-side; the error boundary shows friendly copy.
@@ -64,15 +80,82 @@ export const listPersonalCategories = cache(
   },
 );
 
-function attachCategories(
+/**
+ * The group behind each mirrored expense, keyed by the mirror's source id.
+ *
+ * Two small reads rather than an embed, for the same reason categories are
+ * fetched separately: `expenses` referencing itself makes a PostgREST embed
+ * ambiguous. RLS answers both reads, so a group the user has left simply
+ * resolves to nothing.
+ */
+async function sourceGroups(
+  supabase: Awaited<ReturnType<typeof createClient>>,
   expenses: Expense[],
-  categories: ExpenseCategory[],
-): PersonalExpense[] {
+): Promise<Map<string, SourceGroup>> {
+  const sourceIds = expenses.flatMap((expense) =>
+    expense.source_expense_id ? [expense.source_expense_id] : [],
+  );
+
+  if (sourceIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: sources, error } = await supabase
+    .from("expenses")
+    .select("id, group_id")
+    .in("id", sourceIds);
+
+  if (error) {
+    failed("sourceExpenses", error.message);
+  }
+
+  const groupIds = [
+    ...new Set((sources ?? []).flatMap((source) => (source.group_id ? [source.group_id] : []))),
+  ];
+
+  if (groupIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: groups, error: groupsError } = await supabase
+    .from("groups")
+    .select("id, name")
+    .in("id", groupIds);
+
+  if (groupsError) {
+    failed("sourceGroups", groupsError.message);
+  }
+
+  const groupById = new Map((groups ?? []).map((group) => [group.id, group]));
+  const bySource = new Map<string, SourceGroup>();
+
+  for (const source of sources ?? []) {
+    const group = source.group_id ? groupById.get(source.group_id) : undefined;
+
+    if (group) {
+      bySource.set(source.id, group);
+    }
+  }
+
+  return bySource;
+}
+
+async function resolveExpenses(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  expenses: Expense[],
+): Promise<PersonalExpense[]> {
+  const [categories, groups] = await Promise.all([
+    listPersonalCategories(),
+    sourceGroups(supabase, expenses),
+  ]);
   const byId = new Map(categories.map((category) => [category.id, category]));
 
   return expenses.map((expense) => ({
     ...expense,
     category: expense.category_id ? (byId.get(expense.category_id) ?? null) : null,
+    sourceGroup: expense.source_expense_id
+      ? (groups.get(expense.source_expense_id) ?? null)
+      : null,
   }));
 }
 
@@ -145,10 +228,9 @@ export async function listPersonalExpenses({
   }
 
   const total = count ?? 0;
-  const categories = await listPersonalCategories();
 
   return {
-    expenses: attachCategories(data ?? [], categories),
+    expenses: await resolveExpenses(supabase, data ?? []),
     total,
     page: safePage,
     pageCount: Math.max(1, Math.ceil(total / EXPENSES_PER_PAGE)),
@@ -176,16 +258,15 @@ export async function listRecentPersonalExpenses(
     failed("listRecent", error.message);
   }
 
-  const categories = await listPersonalCategories();
-
-  return attachCategories(data ?? [], categories);
+  return resolveExpenses(supabase, data ?? []);
 }
 
 /**
  * One personal expense, or null.
  *
  * `group_id is null` matters here: without it, a group expense the user can
- * read would open in the personal editor.
+ * read would open in the personal editor. So does `source_expense_id is null`:
+ * a mirror is changed through its group expense, never on its own.
  */
 export async function getPersonalExpense(
   id: string,
@@ -206,6 +287,7 @@ export async function getPersonalExpense(
     .eq("id", id)
     .eq("user_id", user.id)
     .is("group_id", null)
+    .is("source_expense_id", null)
     .maybeSingle();
 
   if (error) {
@@ -216,7 +298,5 @@ export async function getPersonalExpense(
     return null;
   }
 
-  const categories = await listPersonalCategories();
-
-  return attachCategories([data], categories)[0];
+  return (await resolveExpenses(supabase, [data]))[0];
 }

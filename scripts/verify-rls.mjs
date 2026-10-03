@@ -868,6 +868,103 @@ async function run() {
     assert(data[0].user_id === bob.id, "the recorder of an expense was rewritten");
   });
 
+  // -- Group expenses in the payer's personal records (migration 0006) -------
+
+  /** The personal mirror of a group expense, as `who` sees it. */
+  async function mirrorOf(who, sourceId) {
+    const { data, error } = await who.db
+      .from("expenses")
+      .select("*")
+      .eq("source_expense_id", sourceId);
+    assert(!error, error?.message);
+    return data;
+  }
+
+  await check("the payer gets a personal copy of a group expense someone else recorded", async () => {
+    const mirrors = await mirrorOf(alice, bobExpense.id);
+    assert(mirrors.length === 1, `expected one mirror for the payer, found ${mirrors.length}`);
+    const [mirror] = mirrors;
+    assert(mirror.group_id === null, "the mirror is not a personal expense");
+    assert(mirror.user_id === alice.id && mirror.paid_by === alice.id, "the mirror is not the payer's");
+    // Both edits above — the author's and the admin's — reached it.
+    assert(Number(mirror.amount) === 3500, `the mirror's amount is ${mirror.amount}`);
+    assert(mirror.notes === "Split later", "the mirror did not follow the admin's edit");
+  });
+
+  await check("the copy is filed under the payer's own category of the same name", async () => {
+    // Alice had no personal "Food" category, so one was created for her (0007).
+    const [mirror] = await mirrorOf(alice, bobExpense.id);
+    const { data, error } = await alice.db
+      .from("categories")
+      .select("user_id, name")
+      .eq("id", mirror.category_id);
+    assert(!error, error?.message);
+    assert(data?.length === 1, "the mirror has no category");
+    assert(data[0].user_id === alice.id, "the mirror's category is not the payer's own");
+    assert(data[0].name === "Food", `the mirror's category is "${data[0].name}"`);
+  });
+
+  await check("the recorder who did not pay gets no copy, and cannot read the payer's", async () => {
+    assert((await mirrorOf(bob, bobExpense.id)).length === 0, "the recorder can read the payer's mirror");
+    assert((await mirrorOf(mallory, bobExpense.id)).length === 0, "a non-member can read the mirror");
+  });
+
+  await check("the payer cannot edit or delete the copy directly", async () => {
+    const [mirror] = await mirrorOf(alice, bobExpense.id);
+    expectDenied(
+      await alice.db.from("expenses").update({ amount: 1 }).eq("id", mirror.id).select(),
+      "editing a mirror",
+    );
+    expectDenied(
+      await alice.db.from("expenses").delete().eq("id", mirror.id).select(),
+      "deleting a mirror",
+    );
+    const [kept] = await mirrorOf(alice, bobExpense.id);
+    assert(Number(kept?.amount) === 3500, "the mirror was changed directly");
+  });
+
+  await check("nobody can forge a copy of a group expense", async () => {
+    expectDenied(
+      await bob.db
+        .from("expenses")
+        .insert({
+          user_id: bob.id,
+          paid_by: bob.id,
+          source_expense_id: bobExpense.id,
+          item_name: "Forged mirror",
+          amount: 1,
+          expense_date: today,
+        })
+        .select(),
+      "inserting a mirror by hand",
+    );
+  });
+
+  await check("changing who paid moves the copy to the new payer", async () => {
+    expectOk(
+      await alice.db.from("expenses").update({ paid_by: bob.id }).eq("id", bobExpense.id).select(),
+      "changing the payer",
+    );
+    assert((await mirrorOf(alice, bobExpense.id)).length === 0, "the old payer kept the mirror");
+    assert((await mirrorOf(bob, bobExpense.id)).length === 1, "the new payer has no mirror");
+
+    expectOk(
+      await alice.db.from("expenses").update({ paid_by: alice.id }).eq("id", bobExpense.id).select(),
+      "changing the payer back",
+    );
+  });
+
+  await check("deleting a group expense deletes the copy", async () => {
+    const [mirror] = await mirrorOf(alice, aliceGroupExpense.id);
+    assert(mirror, "the admin's own group expense was not mirrored to them");
+    expectOk(
+      await alice.db.from("expenses").delete().eq("id", aliceGroupExpense.id).select(),
+      "deleting the group expense",
+    );
+    const { data } = await alice.db.from("expenses").select("id").eq("id", mirror.id);
+    assert(data?.length === 0, "the mirror outlived its group expense");
+  });
+
   await check("archived categories cannot be used for new expenses", async () => {
     await alice.db.from("categories").update({ is_archived: true }).eq("id", groupCategory.id);
     expectDenied(

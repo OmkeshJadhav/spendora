@@ -48,7 +48,7 @@ export type GroupExpensePage = {
 };
 
 const EXPENSE_COLUMNS =
-  "id, user_id, group_id, paid_by, category_id, personal_owner_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
+  "id, user_id, group_id, paid_by, category_id, personal_owner_id, source_expense_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
 
 function failed(context: string, message: string): never {
   // Detail stays server-side; the error boundary shows friendly copy.

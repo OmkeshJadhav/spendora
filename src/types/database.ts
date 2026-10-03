@@ -317,6 +317,12 @@ export type Database = {
            * expenses. Read-only — the database computes it.
            */
           personal_owner_id: string | null;
+          /**
+           * Set on a personal expense that mirrors a group expense its owner
+           * paid (migration 0006). Written only by the database: a mirror
+           * follows its group expense and cannot be edited directly.
+           */
+          source_expense_id: string | null;
           item_name: string;
           /**
            * numeric(14,2). PostgREST serialises it as a JSON number, so it
@@ -393,6 +399,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "categories";
             referencedColumns: ["id", "user_id"];
+          },
+          {
+            foreignKeyName: "expenses_source_expense_id_fkey";
+            columns: ["source_expense_id"];
+            isOneToOne: true;
+            referencedRelation: "expenses";
+            referencedColumns: ["id"];
           },
         ];
       };

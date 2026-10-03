@@ -22,6 +22,8 @@ psql "$SUPABASE_DB_URL" -f supabase/migrations/0002_core_schema.sql
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0003_invitation_preview.sql
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0004_admin_succession.sql
 psql "$SUPABASE_DB_URL" -f supabase/migrations/0005_in_app_invitations.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/0006_group_expense_mirrors.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/0007_mirror_creates_categories.sql
 ```
 
 Apply them **in order**. 0004 and 0005 each replace a function that 0002 also
@@ -90,6 +92,8 @@ npx supabase gen types typescript --linked > src/types/database.ts
 | `0003_invitation_preview.sql` | `invitation_preview()` — what an invitation link may show its holder, keyed by the token hash — and the `mask_email()` helper it uses |
 | `0004_admin_succession.sql` | Replaces `enforce_group_has_admin()` so deleting an *account* hands its groups on instead of failing |
 | `0005_in_app_invitations.sql` | `declined` status, the invitee's decline policy, `role`/`expires_at` pinning for non-admins, and `my_pending_invitations()` |
+| `0006_group_expense_mirrors.sql` | `expenses.source_expense_id`, the trigger that copies each INR group expense into its payer's personal expenses, the guard that keeps those copies read-only, and a backfill of existing group expenses |
+| `0007_mirror_creates_categories.sql` | Replaces `mirror_group_expense()` so a copy gets the payer's personal category of the same name, creating it (or restoring an archived one) when needed, and re-runs the backfill |
 
 ## Verifying authorization
 

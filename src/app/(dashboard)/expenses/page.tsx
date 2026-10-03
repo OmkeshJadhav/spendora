@@ -81,7 +81,7 @@ export default async function ExpensesPage(props: PageProps<"/expenses">) {
         description={
           filtered
             ? `${total} matching ${total === 1 ? "expense" : "expenses"}, totalling ${formatMinorUnits(filteredTotal, DEFAULT_CURRENCY_CODE)}.`
-            : "Your personal expenses. Only you can see them."
+            : "Your personal expenses, including what you paid for in groups. Only you can see this list."
         }
         action={
           <Link

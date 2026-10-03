@@ -33,7 +33,7 @@ import type { CurrencyCode, Expense } from "@/types";
  */
 
 const EXPENSE_COLUMNS =
-  "id, user_id, group_id, paid_by, category_id, personal_owner_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
+  "id, user_id, group_id, paid_by, category_id, personal_owner_id, source_expense_id, item_name, amount, currency_code, expense_date, payment_mode, notes, created_at, updated_at";
 
 /**
  * How many rows are read per request while paging.
