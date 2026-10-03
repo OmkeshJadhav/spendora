@@ -300,11 +300,13 @@ function addExpense(user, values) {
   });
 }
 
+const ITEM_FIELDS = ["itemName", "amount", "expenseDate", "category", "paymentMode", "notes"];
+
 /**
- * Submits the add-expense form with several item rows. Each row repeats the
- * item field names, exactly as the form's "Add another item" button renders.
+ * Submits the add-expense form with several item rows. Each row repeats every
+ * expense field, exactly as the form's "Add another item" button renders.
  */
-async function addExpenses(user, shared, items) {
+async function addExpenses(user, items) {
   const page = await getPage(user, "/expenses/new");
   assert(page.status === 200, `GET /expenses/new returned ${page.status}`);
 
@@ -313,17 +315,13 @@ async function addExpenses(user, shared, items) {
 
   for (const [name, value] of hiddenFields(form)) {
     // The page's own (single, empty) row is replaced by the rows given here.
-    if (!["itemName", "amount", "category", "newCategoryName"].includes(name)) {
-      body.append(name, value);
-    }
-  }
-  for (const [name, value] of Object.entries({ paymentMode: "", notes: "", ...shared })) {
-    body.append(name, value);
+    if (![...ITEM_FIELDS, "newCategoryName"].includes(name)) body.append(name, value);
   }
   for (const item of items) {
     // As the form renders it: a new-category name only on a row creating one.
-    for (const name of ["itemName", "amount", "category"]) {
-      if (!item.skip?.includes(name)) body.append(name, item[name] ?? "");
+    for (const name of ITEM_FIELDS) {
+      const fallback = name === "expenseDate" ? TODAY : "";
+      if (!item.skip?.includes(name)) body.append(name, item[name] ?? fallback);
     }
     if (item.category === "__create__") body.append("newCategoryName", item.newCategoryName);
   }
@@ -510,17 +508,20 @@ async function run() {
   // -------------------------------------------------------------------------
   group("Several items at once");
 
-  await check("several items are saved in one submission, sharing date, mode and notes", async () => {
+  await check("several items are saved in one submission, each with its own details", async () => {
     const before = (await expensesOf(owner)).length;
-    const result = await addExpenses(
-      owner,
-      { expenseDate: TODAY, paymentMode: "cash", notes: "Market run" },
-      [
-        { itemName: "Apples", amount: "120", category: "__create__", newCategoryName: "Market" },
-        { itemName: "Bread", amount: "45.50", category: "name:Groceries" },
-        { itemName: "Flowers", amount: "200", category: "__create__", newCategoryName: "market" },
-      ],
-    );
+    const result = await addExpenses(owner, [
+      {
+        itemName: "Apples",
+        amount: "120",
+        category: "__create__",
+        newCategoryName: "Market",
+        paymentMode: "cash",
+        notes: "Market run",
+      },
+      { itemName: "Bread", amount: "45.50", category: "name:Groceries", expenseDate: "2026-09-10", paymentMode: "upi" },
+      { itemName: "Flowers", amount: "200", category: "__create__", newCategoryName: "market" },
+    ]);
     assert(result.redirect === "/expenses?flash=expenses-created", `redirect ${result.redirect}`);
 
     const expenses = await expensesOf(owner);
@@ -529,12 +530,21 @@ async function run() {
     const added = expenses.filter((e) => ["Apples", "Bread", "Flowers"].includes(e.item_name));
     assert(added.length === 3, "not every item was stored");
     for (const expense of added) {
-      assert(expense.expense_date === TODAY, `${expense.item_name}: date ${expense.expense_date}`);
-      assert(expense.payment_mode === "cash", `${expense.item_name}: mode ${expense.payment_mode}`);
-      assert(expense.notes === "Market run", `${expense.item_name}: notes ${expense.notes}`);
       assert(expense.paid_by === owner.id && expense.user_id === owner.id, "wrong owner or payer");
     }
-    assert(added.find((e) => e.item_name === "Bread").amount === 45.5, "Bread's amount is wrong");
+    const details = (name) => {
+      const e = added.find((row) => row.item_name === name);
+      return [e.amount, e.expense_date, e.payment_mode, e.notes];
+    };
+    const expected = {
+      Apples: [120, TODAY, "cash", "Market run"],
+      Bread: [45.5, "2026-09-10", "upi", null],
+      Flowers: [200, TODAY, null, null],
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      const got = details(name);
+      assert(JSON.stringify(got) === JSON.stringify(want), `${name}: ${JSON.stringify(got)}`);
+    }
 
     const market = (await categoriesOf(owner)).filter((c) => c.name.toLowerCase() === "market");
     assert(market.length === 1, `two rows naming one new category made ${market.length}`);
@@ -548,9 +558,9 @@ async function run() {
 
   await check("one invalid item rejects the whole submission", async () => {
     const before = (await expensesOf(owner)).length;
-    const result = await addExpenses(owner, { expenseDate: TODAY }, [
+    const result = await addExpenses(owner, [
       { itemName: "Fine", amount: "10" },
-      { itemName: "Broken", amount: "-5" },
+      { itemName: "Broken", amount: "10", expenseDate: "2999-01-01" },
     ]);
     assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
     assert((await expensesOf(owner)).length === before, "some items were saved anyway");
@@ -558,9 +568,9 @@ async function run() {
 
   await check("rows whose fields do not line up are refused", async () => {
     const before = (await expensesOf(owner)).length;
-    const result = await addExpenses(owner, { expenseDate: TODAY }, [
+    const result = await addExpenses(owner, [
       { itemName: "One", amount: "10" },
-      { itemName: "Two", amount: "20", skip: ["amount"] },
+      { itemName: "Two", amount: "20", skip: ["notes"] },
     ]);
     assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
     assert((await expensesOf(owner)).length === before, "a misaligned form was saved");
@@ -569,7 +579,7 @@ async function run() {
   await check("more than 20 items at once are refused", async () => {
     const before = (await expensesOf(owner)).length;
     const items = Array.from({ length: 21 }, (_, i) => ({ itemName: `Bulk ${i}`, amount: "1" }));
-    const result = await addExpenses(owner, { expenseDate: TODAY }, items);
+    const result = await addExpenses(owner, items);
     assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
     assert((await expensesOf(owner)).length === before, "an oversized batch was saved");
   });

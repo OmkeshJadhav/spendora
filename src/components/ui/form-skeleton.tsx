@@ -43,3 +43,27 @@ export function FormPageSkeleton({
     </div>
   );
 }
+
+/** The same shape without the page around it, for a form inside a modal. */
+export function ModalFormSkeleton({
+  label,
+  fields = 5,
+}: {
+  label: string;
+  fields?: number;
+}) {
+  return (
+    <div role="status" className="flex flex-col gap-5">
+      <span className="sr-only">{label}</span>
+
+      {Array.from({ length: fields }, (_, index) => (
+        <div key={index} className="flex flex-col gap-1.5">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ))}
+
+      <Skeleton className="h-10 w-32" />
+    </div>
+  );
+}

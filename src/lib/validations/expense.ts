@@ -83,27 +83,21 @@ const categoryName = z
 /** The most items one "add expenses" submission may carry. */
 export const MAX_ITEMS_PER_ENTRY = 20;
 
-/** The fields that differ from item to item when several are added at once. */
-const itemFields = {
+/**
+ * Every field an expense form submits for one item, group or personal. When
+ * several items are added at once each carries its own copy of all of these;
+ * only a group's `paidBy` is shared.
+ */
+const expenseFields = {
   itemName,
   amount,
+  expenseDate,
   /** An existing category id, a `name:` selection, or the create sentinel. */
   category: z.string().trim().max(120).default(CATEGORY_NONE),
   /** Only read when `category` is the create sentinel. */
   newCategoryName: z.string().trim().max(60).default(""),
-};
-
-/** The fields every item in one submission shares. */
-const sharedFields = {
-  expenseDate,
   paymentMode,
   notes,
-};
-
-/** Every field an expense form submits, group or personal. */
-const expenseFields = {
-  ...itemFields,
-  ...sharedFields,
 };
 
 /** A new category name is only required when the form asked to create one. */
@@ -164,18 +158,8 @@ export const groupExpenseSchema = z
     category: resolveCategoryChoice(value.category, value.newCategoryName),
   }));
 
-/** One row of a multi-item submission. */
-const expenseItemSchema = z
-  .object(itemFields)
-  .superRefine(checkNewCategoryName)
-  .transform((value) => ({
-    itemName: value.itemName,
-    amount: value.amount,
-    category: resolveCategoryChoice(value.category, value.newCategoryName),
-  }));
-
 const items = z
-  .array(expenseItemSchema)
+  .array(expenseSchema)
   .min(1, "Add at least one item")
   .max(
     MAX_ITEMS_PER_ENTRY,
@@ -183,15 +167,13 @@ const items = z
   );
 
 /**
- * Several personal expenses recorded in one go — a shopping trip, say. Each
- * item has its own name, amount and category; the date, payment mode and notes
- * apply to all of them.
+ * Several personal expenses recorded in one go, each with every field a
+ * single expense has.
  */
-export const expenseBatchSchema = z.object({ ...sharedFields, items });
+export const expenseBatchSchema = z.object({ items });
 
 /** As `expenseBatchSchema`, with one payer for every item. */
 export const groupExpenseBatchSchema = z.object({
-  ...sharedFields,
   paidBy: z.uuid("Choose who paid from the list"),
   items,
 });

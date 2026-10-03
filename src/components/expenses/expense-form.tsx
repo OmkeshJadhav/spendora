@@ -1,21 +1,28 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { ChevronDown, Plus, X } from "lucide-react";
 import Link from "next/link";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, fieldAria } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { useModalDismiss } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { idleFormState, type FormState } from "@/lib/auth/form-state";
 import { DEFAULT_CATEGORIES, PAYMENT_MODES } from "@/lib/constants";
 import { MIN_EXPENSE_DATE, maxExpenseDate, todayIso, type IsoDate } from "@/lib/dates";
-import { itemKey, type ItemField } from "@/lib/expenses/batch-form";
+import { ITEM_FIELDS, itemKey, type ItemField } from "@/lib/expenses/batch-form";
 import type { ExpenseCategory } from "@/lib/expenses/queries";
-import { currencyOf, formatMinorUnits, toMinorUnits } from "@/lib/money";
+import {
+  currencyOf,
+  formatCurrency,
+  formatMinorUnits,
+  toMinorUnits,
+} from "@/lib/money";
+import { cn } from "@/lib/utils";
 import {
   CATEGORY_CREATE,
   CATEGORY_NAME_PREFIX,
@@ -59,16 +66,17 @@ type ExpenseFormProps = {
    */
   canCreateCategories?: boolean;
   currencyCode: CurrencyCode;
-  /** Today as the server sees it; corrected to the browser's day on mount. */
+  /** Today as the server sees it; replaced by the browser's day once hydrated. */
   serverToday: IsoDate;
   defaults?: ExpenseFormDefaults;
   /**
-   * Offer "Add another item", so several expenses sharing a date, payer and
-   * payment mode are recorded in one submit. Only for adding: an edit changes
-   * exactly one expense.
+   * Offer "Add another item", so several expenses are recorded in one submit.
+   * Each item has its own fields; only the payer is shared. Only for adding:
+   * an edit changes exactly one expense.
    */
   multiple?: boolean;
   submitLabel: string;
+  /** Where Cancel goes on a full page. Inside a modal, Cancel closes it. */
   cancelHref: string;
 };
 
@@ -79,19 +87,21 @@ type ExpenseFormProps = {
  * after its action runs, and an uncontrolled row would refill from whichever
  * echoed values now share its index — after a removal, another row's.
  */
-type ItemRow = { key: number } & Record<ItemField, string>;
-
-function blankRow(key: number): ItemRow {
-  return {
-    key,
-    itemName: "",
-    amount: "",
-    category: CATEGORY_NONE,
-    newCategoryName: "",
-  };
-}
+type ItemRow = {
+  key: number;
+  itemName: string;
+  amount: string;
+  /** Null until chosen, meaning "today" — the browser's, once it can say. */
+  expenseDate: string | null;
+  category: string;
+  newCategoryName: string;
+  paymentMode: string;
+  notes: string;
+};
 
 const AMOUNT_PATTERN = /^\d{1,12}(\.\d{1,2})?$/;
+
+const subscribeToNothing = () => () => {};
 
 /**
  * The add/edit expense form (specification sections 7 and 36).
@@ -100,6 +110,10 @@ const AMOUNT_PATTERN = /^\d{1,12}(\.\d{1,2})?$/;
  * control is a native one, so the whole form works with a keyboard, with a
  * screen reader, and with the platform's own date and select pickers on
  * mobile.
+ *
+ * Adding several items, each sits in an accordion panel. Adding another
+ * collapses the rest to their name and amount, so a long list stays short.
+ * Collapsed panels are hidden, not unmounted, so their fields still submit.
  */
 export function ExpenseForm({
   action,
@@ -115,49 +129,65 @@ export function ExpenseForm({
   cancelHref,
 }: ExpenseFormProps) {
   const [state, formAction, pending] = useActionState(action, idleFormState);
-  const isNew = defaults?.expenseDate === undefined;
+  const dismissModal = useModalDismiss();
+
+  // The server's "today" is its own calendar day, which can fall either side
+  // of the visitor's. Rows that have not picked a date follow the browser's.
+  const today = useSyncExternalStore(
+    subscribeToNothing,
+    todayIso,
+    () => serverToday,
+  );
 
   const [rows, setRows] = useState<ItemRow[]>([
     {
-      ...blankRow(0),
+      key: 0,
       itemName: defaults?.itemName ?? "",
       amount: defaults?.amount ?? "",
+      expenseDate: defaults?.expenseDate ?? null,
       category: defaults?.category ?? CATEGORY_NONE,
+      newCategoryName: "",
+      paymentMode: defaults?.paymentMode ?? "",
+      notes: defaults?.notes ?? "",
     },
   ]);
   const nextKey = useRef(1);
+  const [expandedKey, setExpandedKey] = useState<number | null>(0);
   // The row just added, whose item name takes focus as it mounts.
   const [focusKey, setFocusKey] = useState<number | null>(null);
+
   // Row errors are keyed by position. Once a row is removed they point at the
   // wrong rows, so they are hidden until the next submission replaces them.
   const [staleState, setStaleState] = useState<FormState | null>(null);
   const rowState = state === staleState ? idleFormState : state;
-  const dateRef = useRef<HTMLInputElement>(null);
 
-  const currency = currencyOf(currencyCode);
+  const rowHasErrors = (index: number) =>
+    ITEM_FIELDS.some(
+      (field) => rowState.fieldErrors?.[itemKey(field, index)]?.length,
+    );
 
-  // The server's "today" is its own calendar day, which can fall either side
-  // of the visitor's. Correct the input once the browser can answer — only for
-  // a new expense, and only while the field still holds the server's guess.
-  useEffect(() => {
-    const input = dateRef.current;
+  // A rejected submission opens the first item that needs fixing, so the
+  // message is never inside a collapsed panel.
+  const [seenState, setSeenState] = useState(state);
 
-    if (!isNew || !input) {
-      return;
+  if (state !== seenState) {
+    setSeenState(state);
+    const first = rows.findIndex((_, index) =>
+      ITEM_FIELDS.some((field) => state.fieldErrors?.[itemKey(field, index)]),
+    );
+
+    if (multiple && first >= 0) {
+      setExpandedKey(rows[first].key);
     }
-
-    const browserToday = todayIso();
-
-    if (input.value === serverToday && browserToday !== serverToday) {
-      input.value = browserToday;
-    }
-  }, [isNew, serverToday]);
+  }
 
   useEffect(() => {
     if (state.status === "error" && state.message) {
       toast.error(state.message, { id: "expense-form" });
     }
   }, [state]);
+
+  const currency = currencyOf(currencyCode);
 
   const existingNames = new Set(
     categories.map((item) => item.name.trim().toLowerCase()),
@@ -181,13 +211,37 @@ export function ExpenseForm({
 
   function addRow() {
     const key = nextKey.current++;
-    setRows((current) => [...current, blankRow(key)]);
+    const previous = rows[rows.length - 1];
+
+    // A new item starts on the previous one's date and payment mode — usually
+    // the same trip — and either can be changed.
+    setRows((current) => [
+      ...current,
+      {
+        key,
+        itemName: "",
+        amount: "",
+        expenseDate: previous?.expenseDate ?? null,
+        category: CATEGORY_NONE,
+        newCategoryName: "",
+        paymentMode: previous?.paymentMode ?? "",
+        notes: "",
+      },
+    ]);
+    setExpandedKey(key);
     setFocusKey(key);
   }
 
   function removeRow(key: number) {
-    setRows((current) => current.filter((row) => row.key !== key));
+    const index = rows.findIndex((row) => row.key === key);
+    const remaining = rows.filter((row) => row.key !== key);
+
+    setRows(remaining);
     setStaleState(state);
+
+    if (expandedKey === key) {
+      setExpandedKey(remaining[Math.max(0, index - 1)]?.key ?? null);
+    }
   }
 
   // In minor units, so ten items of ₹0.10 total ₹1.00 and not ₹0.9999….
@@ -204,32 +258,99 @@ export function ExpenseForm({
 
   return (
     <form action={formAction} className="flex flex-col gap-5" noValidate>
-      {rows.map((row, index) => (
-        <ItemFields
-          key={row.key}
-          row={row}
-          index={index}
-          // A single row keeps the original field ids and error keys, which is
-          // what the edit actions read and report.
-          indexed={multiple}
-          removable={multiple && rows.length > 1}
-          autoFocus={row.key === focusKey}
-          fieldErrors={rowState.fieldErrors}
-          categories={categories}
-          suggestions={suggestions}
-          canCreateCategories={canCreateCategories}
-          inGroup={Boolean(members)}
-          currencySymbol={currency.symbol}
-          amountHint={multiple ? undefined : amountHint}
-          categoryHint={multiple ? undefined : categoryHint}
-          disabled={pending}
-          onChange={(patch) => updateRow(row.key, patch)}
-          onRemove={() => removeRow(row.key)}
-        />
-      ))}
-
       {multiple ? (
         <div className="flex flex-col gap-3">
+          {rows.map((row, index) => {
+            const expanded = row.key === expandedKey;
+            const panelId = `item-${row.key}-panel`;
+            const amount = row.amount.trim();
+
+            return (
+              <div
+                key={row.key}
+                className={cn(
+                  "rounded-md border",
+                  rowHasErrors(index) ? "border-danger" : "border-border",
+                )}
+              >
+                <div className="flex items-center gap-1 pr-2">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-4 py-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-expanded={expanded}
+                    aria-controls={panelId}
+                    onClick={() => setExpandedKey(expanded ? null : row.key)}
+                  >
+                    <ChevronDown
+                      aria-hidden
+                      className={cn(
+                        "size-4 shrink-0 text-muted-foreground transition-transform",
+                        expanded ? "rotate-180" : null,
+                      )}
+                    />
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      Item {index + 1}
+                    </span>
+                    <span
+                      className={cn(
+                        "truncate font-medium",
+                        row.itemName.trim() ? null : "text-muted-foreground",
+                      )}
+                    >
+                      {row.itemName.trim() || "Untitled item"}
+                    </span>
+                    {rowHasErrors(index) ? (
+                      <span className="shrink-0 text-xs font-medium text-danger-strong">
+                        Needs fixing
+                      </span>
+                    ) : null}
+                    <span className="tabular ml-auto shrink-0 font-medium">
+                      {AMOUNT_PATTERN.test(amount)
+                        ? formatCurrency(Number(amount), currencyCode)
+                        : "—"}
+                    </span>
+                  </button>
+
+                  {rows.length > 1 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="px-2"
+                      onClick={() => removeRow(row.key)}
+                      disabled={pending}
+                      aria-label={`Remove item ${index + 1}`}
+                    >
+                      <X aria-hidden />
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div
+                  id={panelId}
+                  hidden={!expanded}
+                  className="border-t border-border p-4"
+                >
+                  <ItemFields
+                    row={row}
+                    index={index}
+                    indexed
+                    autoFocus={row.key === focusKey}
+                    fieldErrors={rowState.fieldErrors}
+                    categories={categories}
+                    suggestions={suggestions}
+                    canCreateCategories={canCreateCategories}
+                    inGroup={Boolean(members)}
+                    currencySymbol={currency.symbol}
+                    today={today}
+                    serverToday={serverToday}
+                    onChange={(patch) => updateRow(row.key, patch)}
+                  />
+                </div>
+              </div>
+            );
+          })}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Button
               type="button"
@@ -253,7 +374,7 @@ export function ExpenseForm({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            {amountHint} {categoryHint} The details below apply to every item.
+            {amountHint} {categoryHint}
             {rows.length >= MAX_ITEMS_PER_ENTRY
               ? ` You can add up to ${MAX_ITEMS_PER_ENTRY} items at a time.`
               : ""}
@@ -265,14 +386,38 @@ export function ExpenseForm({
             </p>
           ) : null}
         </div>
-      ) : null}
+      ) : (
+        <ItemFields
+          row={rows[0]}
+          index={0}
+          // A single row keeps the original field ids and error keys, which is
+          // what the edit actions read and report.
+          indexed={false}
+          autoFocus={false}
+          fieldErrors={state.fieldErrors}
+          categories={categories}
+          suggestions={suggestions}
+          canCreateCategories={canCreateCategories}
+          inGroup={Boolean(members)}
+          currencySymbol={currency.symbol}
+          amountHint={amountHint}
+          categoryHint={categoryHint}
+          today={today}
+          serverToday={serverToday}
+          onChange={(patch) => updateRow(rows[0].key, patch)}
+        />
+      )}
 
       {members ? (
         <Field
           name="paidBy"
           label="Paid by"
           errors={state.fieldErrors?.paidBy}
-          hint="Any member of this group can be recorded as having paid."
+          hint={
+            multiple
+              ? "Applies to every item. Any member of this group can be recorded as having paid."
+              : "Any member of this group can be recorded as having paid."
+          }
         >
           <Select
             name="paidBy"
@@ -309,65 +454,22 @@ export function ExpenseForm({
         </Field>
       )}
 
-      <Field
-        name="expenseDate"
-        label="Date"
-        errors={state.fieldErrors?.expenseDate}
-      >
-        <Input
-          ref={dateRef}
-          name="expenseDate"
-          type="date"
-          defaultValue={
-            state.values?.expenseDate ?? defaults?.expenseDate ?? serverToday
-          }
-          min={MIN_EXPENSE_DATE}
-          max={maxExpenseDate(serverToday)}
-          className="tabular"
-          {...fieldAria("expenseDate", { errors: state.fieldErrors?.expenseDate })}
-          required
-        />
-      </Field>
-
-      <Field
-        name="paymentMode"
-        label="Payment mode"
-        errors={state.fieldErrors?.paymentMode}
-      >
-        <Select
-          name="paymentMode"
-          defaultValue={state.values?.paymentMode ?? defaults?.paymentMode ?? ""}
-          {...fieldAria("paymentMode", { errors: state.fieldErrors?.paymentMode })}
-        >
-          <option value="">Not recorded</option>
-          {PAYMENT_MODES.map((mode) => (
-            <option key={mode.value} value={mode.value}>
-              {mode.label}
-            </option>
-          ))}
-        </Select>
-      </Field>
-
-      <Field name="notes" label="Notes" errors={state.fieldErrors?.notes}>
-        <Textarea
-          name="notes"
-          placeholder="Dinner with friends"
-          maxLength={500}
-          defaultValue={state.values?.notes ?? defaults?.notes}
-          {...fieldAria("notes", { errors: state.fieldErrors?.notes })}
-        />
-      </Field>
-
       <div className="flex items-center gap-3 pt-1">
         <Button type="submit" loading={pending}>
           {rows.length > 1 ? `Save ${rows.length} expenses` : submitLabel}
         </Button>
-        <Link
-          href={cancelHref}
-          className={buttonVariants({ variant: "ghost", size: "md" })}
-        >
-          Cancel
-        </Link>
+        {dismissModal ? (
+          <Button type="button" variant="ghost" onClick={dismissModal}>
+            Cancel
+          </Button>
+        ) : (
+          <Link
+            href={cancelHref}
+            className={buttonVariants({ variant: "ghost", size: "md" })}
+          >
+            Cancel
+          </Link>
+        )}
       </div>
     </form>
   );
@@ -377,7 +479,6 @@ type ItemFieldsProps = {
   row: ItemRow;
   index: number;
   indexed: boolean;
-  removable: boolean;
   autoFocus: boolean;
   fieldErrors?: Record<string, string[]>;
   categories: ExpenseCategory[];
@@ -387,13 +488,13 @@ type ItemFieldsProps = {
   currencySymbol: string;
   amountHint?: string;
   categoryHint?: string;
-  disabled: boolean;
+  today: IsoDate;
+  serverToday: IsoDate;
   onChange: (patch: Partial<ItemRow>) => void;
-  onRemove: () => void;
 };
 
 /**
- * One item's name, amount and category.
+ * One item's fields: everything an expense has except who paid.
  *
  * Every row submits the same input names, so the server reads the rows as
  * parallel lists (see `lib/expenses/batch-form.ts`). Ids and errors are per
@@ -403,7 +504,6 @@ function ItemFields({
   row,
   index,
   indexed,
-  removable,
   autoFocus,
   fieldErrors,
   categories,
@@ -413,9 +513,9 @@ function ItemFields({
   currencySymbol,
   amountHint,
   categoryHint,
-  disabled,
+  today,
+  serverToday,
   onChange,
-  onRemove,
 }: ItemFieldsProps) {
   const key = (field: ItemField) => (indexed ? itemKey(field, index) : field);
   const id = (field: ItemField) => (indexed ? `${field}-${index}` : field);
@@ -423,14 +523,15 @@ function ItemFields({
 
   const creatingCategory =
     canCreateCategories && row.category === CATEGORY_CREATE;
+  const pair = indexed
+    ? "grid gap-4 sm:grid-cols-2"
+    : "flex flex-col gap-5";
 
-  const fields = (
-    <>
+  return (
+    <div className={cn("flex flex-col", indexed ? "gap-4" : "gap-5")}>
       <div
         className={
-          indexed
-            ? "grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]"
-            : "flex flex-col gap-5"
+          indexed ? "grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]" : pair
         }
       >
         <Field
@@ -481,6 +582,50 @@ function ItemFields({
               required
             />
           </div>
+        </Field>
+      </div>
+
+      <div className={pair}>
+        <Field
+          name={id("expenseDate")}
+          label="Date"
+          errors={errorsOf("expenseDate")}
+        >
+          <Input
+            name="expenseDate"
+            type="date"
+            value={row.expenseDate ?? today}
+            onChange={(event) => onChange({ expenseDate: event.target.value })}
+            min={MIN_EXPENSE_DATE}
+            max={maxExpenseDate(serverToday)}
+            className="tabular"
+            {...fieldAria(id("expenseDate"), {
+              errors: errorsOf("expenseDate"),
+            })}
+            required
+          />
+        </Field>
+
+        <Field
+          name={id("paymentMode")}
+          label="Payment mode"
+          errors={errorsOf("paymentMode")}
+        >
+          <Select
+            name="paymentMode"
+            value={row.paymentMode}
+            onChange={(event) => onChange({ paymentMode: event.target.value })}
+            {...fieldAria(id("paymentMode"), {
+              errors: errorsOf("paymentMode"),
+            })}
+          >
+            <option value="">Not recorded</option>
+            {PAYMENT_MODES.map((mode) => (
+              <option key={mode.value} value={mode.value}>
+                {mode.label}
+              </option>
+            ))}
+          </Select>
         </Field>
       </div>
 
@@ -548,38 +693,17 @@ function ItemFields({
           />
         </Field>
       ) : null}
-    </>
-  );
 
-  if (!indexed) {
-    return fields;
-  }
-
-  return (
-    <div
-      role="group"
-      aria-labelledby={`item-${index}-heading`}
-      className="flex flex-col gap-4 rounded-md border border-border p-4"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <p id={`item-${index}-heading`} className="text-sm font-medium">
-          Item {index + 1}
-        </p>
-        {removable ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="-my-1 -mr-2 px-2"
-            onClick={onRemove}
-            disabled={disabled}
-            aria-label={`Remove item ${index + 1}`}
-          >
-            <X aria-hidden />
-          </Button>
-        ) : null}
-      </div>
-      {fields}
+      <Field name={id("notes")} label="Notes" errors={errorsOf("notes")}>
+        <Textarea
+          name="notes"
+          placeholder="Dinner with friends"
+          maxLength={500}
+          value={row.notes}
+          onChange={(event) => onChange({ notes: event.target.value })}
+          {...fieldAria(id("notes"), { errors: errorsOf("notes") })}
+        />
+      </Field>
     </div>
   );
 }

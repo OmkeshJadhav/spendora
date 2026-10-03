@@ -189,27 +189,17 @@ function writeFailureMessage(code: string | undefined, message: string): string 
   }
 }
 
-/** The shared fields of an "add expenses" form, echoed back on rejection. */
-function readSharedFields(formData: FormData) {
-  return {
-    expenseDate: String(formData.get("expenseDate") ?? ""),
-    paymentMode: String(formData.get("paymentMode") ?? ""),
-    notes: String(formData.get("notes") ?? ""),
-  };
-}
-
 /**
  * Adds one or more personal expenses (specification section 7).
  *
- * Every item shares the date, payment mode and notes; each has its own name,
- * amount and category. The rows go in as a single insert, so either all of
- * them are recorded or none are.
+ * Each item has its own name, amount, date, category, payment mode and notes.
+ * The rows go in as a single insert, so either all of them are recorded or
+ * none are.
  */
 export async function createExpense(
   _prevState: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const shared = readSharedFields(formData);
   const items = readItems(formData);
 
   if (!items) {
@@ -219,8 +209,7 @@ export async function createExpense(
     };
   }
 
-  const raw = shared;
-  const parsed = expenseBatchSchema.safeParse({ ...shared, items });
+  const parsed = expenseBatchSchema.safeParse({ items });
 
   if (!parsed.success) {
     const fieldErrors = batchFieldErrorsOf(parsed.error);
@@ -229,7 +218,6 @@ export async function createExpense(
       status: "error",
       message: batchMessage(fieldErrors),
       fieldErrors,
-      values: raw,
     };
   }
 
@@ -259,9 +247,9 @@ export async function createExpense(
         item_name: item.itemName,
         amount: item.amount,
         currency_code: DEFAULT_CURRENCY_CODE,
-        expense_date: input.expenseDate,
-        payment_mode: input.paymentMode,
-        notes: input.notes,
+        expense_date: item.expenseDate,
+        payment_mode: item.paymentMode,
+        notes: item.notes,
       })),
     );
 
@@ -269,18 +257,16 @@ export async function createExpense(
       return {
         status: "error",
         message: writeFailureMessage(error.code, error.message),
-        values: raw,
-      };
+        };
     }
   } catch (error) {
     if (error instanceof CategoryError) {
-      return { status: "error", message: error.message, values: raw };
+      return { status: "error", message: error.message };
     }
 
     return {
       status: "error",
       message: unexpectedErrorMessage(error, "expenses:create"),
-      values: raw,
     };
   }
 

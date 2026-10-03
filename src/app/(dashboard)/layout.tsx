@@ -3,7 +3,10 @@ import { MobileNav } from "@/components/mobile-nav";
 import { requireProfile } from "@/lib/auth/dal";
 import { countMyInvitations } from "@/lib/groups/queries";
 
-export default async function DashboardLayout({ children }: LayoutProps<"/">) {
+export default async function DashboardLayout({
+  children,
+  modal,
+}: LayoutProps<"/">) {
   // Every page in this group also gates itself through the data access layer;
   // this call is what lets the header greet the user by name.
   const profile = await requireProfile();
@@ -38,6 +41,9 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
       </main>
 
       <MobileNav />
+
+      {/* "Add expense" opened from a link, as a modal over the current page. */}
+      {modal}
     </div>
   );
 }

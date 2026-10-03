@@ -8,10 +8,11 @@ import {
 /**
  * Reading a multi-item "add expenses" form.
  *
- * Each item row submits `itemName`, `amount` and `category`, so the rows arrive
- * as parallel lists in document order. `newCategoryName` is only rendered for
- * a row creating a category, so its values belong, in order, to those rows. A
- * form with a single row is indistinguishable from the original one-item form.
+ * Each item row submits every expense field — name, amount, date, category,
+ * payment mode and notes — so the rows arrive as parallel lists in document
+ * order. `newCategoryName` is only rendered for a row creating a category, so
+ * its values belong, in order, to those rows. A form with a single row is
+ * indistinguishable from the original one-item form.
  *
  * Field errors for a row are keyed `<field>.<index>`, so the form can put each
  * message back beside the row it belongs to. The rows' values are not echoed:
@@ -21,8 +22,11 @@ import {
 export const ITEM_FIELDS = [
   "itemName",
   "amount",
+  "expenseDate",
   "category",
   "newCategoryName",
+  "paymentMode",
+  "notes",
 ] as const;
 
 export type ItemField = (typeof ITEM_FIELDS)[number];
@@ -40,15 +44,16 @@ export function readItems(formData: FormData): RawItem[] | null {
   const list = (field: ItemField) =>
     formData.getAll(field).map((value) => String(value));
 
-  const names = list("itemName");
-  const amounts = list("amount");
-  const categories = list("category");
-  const newNames = list("newCategoryName");
-  const count = names.length;
+  const rowFields = ITEM_FIELDS.filter((field) => field !== "newCategoryName");
+  const lists = new Map(rowFields.map((field) => [field, list(field)]));
+  const count = lists.get("itemName")!.length;
 
-  if (amounts.length !== count || categories.length !== count) {
+  if (rowFields.some((field) => lists.get(field)!.length !== count)) {
     return null;
   }
+
+  const categories = lists.get("category")!;
+  const newNames = list("newCategoryName");
 
   // One new name per row (the single-item form's shape), or one per row that
   // is creating a category, in order.
@@ -61,16 +66,20 @@ export function readItems(formData: FormData): RawItem[] | null {
 
   let nextNewName = 0;
 
-  return names.map((itemName, index) => ({
-    itemName,
-    amount: amounts[index],
-    category: categories[index],
-    newCategoryName: perRow
-      ? newNames[index]
-      : categories[index] === CATEGORY_CREATE
-        ? newNames[nextNewName++]
-        : "",
-  }));
+  return Array.from({ length: count }, (_, index) => {
+    const item = Object.fromEntries(
+      rowFields.map((field) => [field, lists.get(field)![index]]),
+    ) as Omit<RawItem, "newCategoryName">;
+
+    return {
+      ...item,
+      newCategoryName: perRow
+        ? newNames[index]
+        : item.category === CATEGORY_CREATE
+          ? newNames[nextNewName++]
+          : "",
+    };
+  });
 }
 
 /**

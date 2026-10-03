@@ -244,21 +244,11 @@ async function groupCurrency(
   return data?.currency_code ?? null;
 }
 
-/** The shared fields of an "add expenses" form, echoed back on rejection. */
-function readSharedFields(formData: FormData) {
-  return {
-    paidBy: String(formData.get("paidBy") ?? ""),
-    expenseDate: String(formData.get("expenseDate") ?? ""),
-    paymentMode: String(formData.get("paymentMode") ?? ""),
-    notes: String(formData.get("notes") ?? ""),
-  };
-}
-
 /**
  * Adds one or more expenses to a group.
  *
- * Every item shares the payer, date, payment mode and notes; each has its own
- * name, amount and category. The rows go in as a single insert, so either all
+ * Every item has its own name, amount, date, category, payment mode and
+ * notes; the payer is shared. The rows go in as a single insert, so either all
  * of them are recorded or none are.
  */
 export async function createGroupExpense(
@@ -266,7 +256,8 @@ export async function createGroupExpense(
   _prevState: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const shared = readSharedFields(formData);
+  // Echoed back so the uncontrolled "Paid by" select keeps its choice.
+  const raw = { paidBy: String(formData.get("paidBy") ?? "") };
   const items = readItems(formData);
 
   if (!items) {
@@ -276,8 +267,7 @@ export async function createGroupExpense(
     };
   }
 
-  const raw = shared;
-  const parsed = groupExpenseBatchSchema.safeParse({ ...shared, items });
+  const parsed = groupExpenseBatchSchema.safeParse({ ...raw, items });
 
   if (!parsed.success) {
     const fieldErrors = batchFieldErrorsOf(parsed.error);
@@ -327,9 +317,9 @@ export async function createGroupExpense(
         item_name: item.itemName,
         amount: item.amount,
         currency_code: currencyCode,
-        expense_date: input.expenseDate,
-        payment_mode: input.paymentMode,
-        notes: input.notes,
+        expense_date: item.expenseDate,
+        payment_mode: item.paymentMode,
+        notes: item.notes,
       })),
     );
 
