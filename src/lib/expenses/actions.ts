@@ -9,9 +9,19 @@ import { getUser } from "@/lib/auth/dal";
 import { unexpectedErrorMessage } from "@/lib/auth/errors";
 import type { FormState } from "@/lib/auth/form-state";
 import { DEFAULT_CURRENCY_CODE } from "@/lib/constants";
+import {
+  batchFieldErrorsOf,
+  batchMessage,
+  readItems,
+  resolveCategoryIds,
+} from "@/lib/expenses/batch-form";
 import { withFlash } from "@/lib/flash";
 import { createClient } from "@/lib/supabase/server";
-import { expenseSchema, type CategoryChoice } from "@/lib/validations/expense";
+import {
+  expenseBatchSchema,
+  expenseSchema,
+  type CategoryChoice,
+} from "@/lib/validations/expense";
 import type { Database } from "@/types/database";
 
 /**
@@ -179,21 +189,51 @@ function writeFailureMessage(code: string | undefined, message: string): string 
   }
 }
 
+/** The shared fields of an "add expenses" form, echoed back on rejection. */
+function readSharedFields(formData: FormData) {
+  return {
+    expenseDate: String(formData.get("expenseDate") ?? ""),
+    paymentMode: String(formData.get("paymentMode") ?? ""),
+    notes: String(formData.get("notes") ?? ""),
+  };
+}
+
+/**
+ * Adds one or more personal expenses (specification section 7).
+ *
+ * Every item shares the date, payment mode and notes; each has its own name,
+ * amount and category. The rows go in as a single insert, so either all of
+ * them are recorded or none are.
+ */
 export async function createExpense(
   _prevState: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const raw = readForm(formData);
-  const parsed = expenseSchema.safeParse(raw);
+  const shared = readSharedFields(formData);
+  const items = readItems(formData);
 
-  if (!parsed.success) {
+  if (!items) {
     return {
       status: "error",
-      message: "Please fix the highlighted fields.",
-      fieldErrors: fieldErrorsOf(parsed.error),
+      message: "This form is out of date. Reload the page and try again.",
+    };
+  }
+
+  const raw = shared;
+  const parsed = expenseBatchSchema.safeParse({ ...shared, items });
+
+  if (!parsed.success) {
+    const fieldErrors = batchFieldErrorsOf(parsed.error);
+
+    return {
+      status: "error",
+      message: batchMessage(fieldErrors),
+      fieldErrors,
       values: raw,
     };
   }
+
+  const input = parsed.data;
 
   try {
     const user = await getUser();
@@ -203,23 +243,27 @@ export async function createExpense(
     }
 
     const supabase = await createClient();
-    const input = parsed.data;
-    const categoryId = await resolveCategoryId(supabase, user.id, input.category);
+    const categoryIds = await resolveCategoryIds(
+      input.items.map((item) => item.category),
+      (choice) => resolveCategoryId(supabase, user.id, choice),
+    );
 
-    const { error } = await supabase.from("expenses").insert({
-      user_id: user.id,
-      group_id: null,
-      // A personal expense is always paid by its owner (specification 45); the
-      // database enforces this too.
-      paid_by: user.id,
-      category_id: categoryId,
-      item_name: input.itemName,
-      amount: input.amount,
-      currency_code: DEFAULT_CURRENCY_CODE,
-      expense_date: input.expenseDate,
-      payment_mode: input.paymentMode,
-      notes: input.notes,
-    });
+    const { error } = await supabase.from("expenses").insert(
+      input.items.map((item, index) => ({
+        user_id: user.id,
+        group_id: null,
+        // A personal expense is always paid by its owner (specification 45);
+        // the database enforces this too.
+        paid_by: user.id,
+        category_id: categoryIds[index],
+        item_name: item.itemName,
+        amount: item.amount,
+        currency_code: DEFAULT_CURRENCY_CODE,
+        expense_date: input.expenseDate,
+        payment_mode: input.paymentMode,
+        notes: input.notes,
+      })),
+    );
 
     if (error) {
       return {
@@ -243,7 +287,12 @@ export async function createExpense(
   revalidatePath(EXPENSES_PATH);
   revalidatePath(DASHBOARD_PATH);
   // redirect() throws to unwind, so it must sit outside the try block.
-  redirect(withFlash(EXPENSES_PATH, "expense-created"));
+  redirect(
+    withFlash(
+      EXPENSES_PATH,
+      input.items.length > 1 ? "expenses-created" : "expense-created",
+    ),
+  );
 }
 
 export async function updateExpense(

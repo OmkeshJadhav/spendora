@@ -8,9 +8,16 @@ import type { z } from "zod";
 import { getUser } from "@/lib/auth/dal";
 import { unexpectedErrorMessage } from "@/lib/auth/errors";
 import type { FormState } from "@/lib/auth/form-state";
+import {
+  batchFieldErrorsOf,
+  batchMessage,
+  readItems,
+  resolveCategoryIds,
+} from "@/lib/expenses/batch-form";
 import { withFlash } from "@/lib/flash";
 import { createClient } from "@/lib/supabase/server";
 import {
+  groupExpenseBatchSchema,
   groupExpenseSchema,
   type CategoryChoice,
 } from "@/lib/validations/expense";
@@ -237,22 +244,53 @@ async function groupCurrency(
   return data?.currency_code ?? null;
 }
 
+/** The shared fields of an "add expenses" form, echoed back on rejection. */
+function readSharedFields(formData: FormData) {
+  return {
+    paidBy: String(formData.get("paidBy") ?? ""),
+    expenseDate: String(formData.get("expenseDate") ?? ""),
+    paymentMode: String(formData.get("paymentMode") ?? ""),
+    notes: String(formData.get("notes") ?? ""),
+  };
+}
+
+/**
+ * Adds one or more expenses to a group.
+ *
+ * Every item shares the payer, date, payment mode and notes; each has its own
+ * name, amount and category. The rows go in as a single insert, so either all
+ * of them are recorded or none are.
+ */
 export async function createGroupExpense(
   groupId: string,
   _prevState: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const raw = readForm(formData);
-  const parsed = groupExpenseSchema.safeParse(raw);
+  const shared = readSharedFields(formData);
+  const items = readItems(formData);
 
-  if (!parsed.success) {
+  if (!items) {
     return {
       status: "error",
-      message: "Please fix the highlighted fields.",
-      fieldErrors: fieldErrorsOf(parsed.error),
+      message: "This form is out of date. Reload the page and try again.",
+    };
+  }
+
+  const raw = shared;
+  const parsed = groupExpenseBatchSchema.safeParse({ ...shared, items });
+
+  if (!parsed.success) {
+    const fieldErrors = batchFieldErrorsOf(parsed.error);
+
+    return {
+      status: "error",
+      message: batchMessage(fieldErrors),
+      fieldErrors,
       values: raw,
     };
   }
+
+  const input = parsed.data;
 
   try {
     const user = await getUser();
@@ -274,26 +312,26 @@ export async function createGroupExpense(
       };
     }
 
-    const input = parsed.data;
-    const categoryId = await resolveGroupCategoryId(
-      supabase,
-      groupId,
-      input.category,
+    const categoryIds = await resolveCategoryIds(
+      input.items.map((item) => item.category),
+      (choice) => resolveGroupCategoryId(supabase, groupId, choice),
     );
 
-    const { error } = await supabase.from("expenses").insert({
-      // The recorder is always the session's user; the payer is chosen.
-      user_id: user.id,
-      group_id: groupId,
-      paid_by: input.paidBy,
-      category_id: categoryId,
-      item_name: input.itemName,
-      amount: input.amount,
-      currency_code: currencyCode,
-      expense_date: input.expenseDate,
-      payment_mode: input.paymentMode,
-      notes: input.notes,
-    });
+    const { error } = await supabase.from("expenses").insert(
+      input.items.map((item, index) => ({
+        // The recorder is always the session's user; the payer is chosen.
+        user_id: user.id,
+        group_id: groupId,
+        paid_by: input.paidBy,
+        category_id: categoryIds[index],
+        item_name: item.itemName,
+        amount: item.amount,
+        currency_code: currencyCode,
+        expense_date: input.expenseDate,
+        payment_mode: input.paymentMode,
+        notes: input.notes,
+      })),
+    );
 
     if (error) {
       return {
@@ -317,7 +355,12 @@ export async function createGroupExpense(
   revalidatePath(groupExpensesPath(groupId));
   revalidatePath(`${GROUPS_PATH}/${groupId}`);
   // redirect() throws to unwind, so it must sit outside the try block.
-  redirect(withFlash(groupExpensesPath(groupId), "expense-created"));
+  redirect(
+    withFlash(
+      groupExpensesPath(groupId),
+      input.items.length > 1 ? "expenses-created" : "expense-created",
+    ),
+  );
 }
 
 export async function updateGroupExpense(

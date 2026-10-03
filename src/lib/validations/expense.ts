@@ -80,17 +80,30 @@ const categoryName = z
   .min(1, "Category name is required")
   .max(60, "Category name must be 60 characters or fewer");
 
-/** Every field an expense form submits, group or personal. */
-const expenseFields = {
+/** The most items one "add expenses" submission may carry. */
+export const MAX_ITEMS_PER_ENTRY = 20;
+
+/** The fields that differ from item to item when several are added at once. */
+const itemFields = {
   itemName,
   amount,
-  expenseDate,
   /** An existing category id, a `name:` selection, or the create sentinel. */
   category: z.string().trim().max(120).default(CATEGORY_NONE),
   /** Only read when `category` is the create sentinel. */
   newCategoryName: z.string().trim().max(60).default(""),
+};
+
+/** The fields every item in one submission shares. */
+const sharedFields = {
+  expenseDate,
   paymentMode,
   notes,
+};
+
+/** Every field an expense form submits, group or personal. */
+const expenseFields = {
+  ...itemFields,
+  ...sharedFields,
 };
 
 /** A new category name is only required when the form asked to create one. */
@@ -151,6 +164,38 @@ export const groupExpenseSchema = z
     category: resolveCategoryChoice(value.category, value.newCategoryName),
   }));
 
+/** One row of a multi-item submission. */
+const expenseItemSchema = z
+  .object(itemFields)
+  .superRefine(checkNewCategoryName)
+  .transform((value) => ({
+    itemName: value.itemName,
+    amount: value.amount,
+    category: resolveCategoryChoice(value.category, value.newCategoryName),
+  }));
+
+const items = z
+  .array(expenseItemSchema)
+  .min(1, "Add at least one item")
+  .max(
+    MAX_ITEMS_PER_ENTRY,
+    `Add at most ${MAX_ITEMS_PER_ENTRY} items at a time`,
+  );
+
+/**
+ * Several personal expenses recorded in one go — a shopping trip, say. Each
+ * item has its own name, amount and category; the date, payment mode and notes
+ * apply to all of them.
+ */
+export const expenseBatchSchema = z.object({ ...sharedFields, items });
+
+/** As `expenseBatchSchema`, with one payer for every item. */
+export const groupExpenseBatchSchema = z.object({
+  ...sharedFields,
+  paidBy: z.uuid("Choose who paid from the list"),
+  items,
+});
+
 /**
  * What the category select actually asked for.
  *
@@ -186,3 +231,5 @@ function resolveCategoryChoice(
 
 export type ExpenseInput = z.infer<typeof expenseSchema>;
 export type GroupExpenseInput = z.infer<typeof groupExpenseSchema>;
+export type ExpenseBatchInput = z.infer<typeof expenseBatchSchema>;
+export type GroupExpenseBatchInput = z.infer<typeof groupExpenseBatchSchema>;

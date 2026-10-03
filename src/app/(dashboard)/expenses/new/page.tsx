@@ -28,7 +28,7 @@ export default async function NewExpensePage() {
     <FadeIn className="mx-auto flex w-full max-w-xl flex-col gap-6">
       <PageHeader
         title="Add expense"
-        description="Record what you spent. Only the first four fields are required."
+        description="Record what you spent. Bought several things at once? Add each as its own item."
       />
 
       <Card>
@@ -45,6 +45,7 @@ export default async function NewExpensePage() {
             payerName={profile.name}
             currencyCode={DEFAULT_CURRENCY_CODE}
             serverToday={todayIso()}
+            multiple
             submitLabel="Save expense"
             cancelHref="/expenses"
           />

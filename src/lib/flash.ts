@@ -9,6 +9,7 @@
 
 export const FLASH_MESSAGES = {
   "expense-created": "Expense added.",
+  "expenses-created": "Expenses added.",
   "expense-updated": "Expense updated.",
   "expense-deleted": "Expense deleted.",
   "group-created": "Group created.",

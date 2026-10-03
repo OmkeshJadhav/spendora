@@ -300,6 +300,48 @@ function addExpense(user, values) {
   });
 }
 
+/**
+ * Submits the add-expense form with several item rows. Each row repeats the
+ * item field names, exactly as the form's "Add another item" button renders.
+ */
+async function addExpenses(user, shared, items) {
+  const page = await getPage(user, "/expenses/new");
+  assert(page.status === 200, `GET /expenses/new returned ${page.status}`);
+
+  const form = findForm(page.html, "itemName");
+  const body = new FormData();
+
+  for (const [name, value] of hiddenFields(form)) {
+    // The page's own (single, empty) row is replaced by the rows given here.
+    if (!["itemName", "amount", "category", "newCategoryName"].includes(name)) {
+      body.append(name, value);
+    }
+  }
+  for (const [name, value] of Object.entries({ paymentMode: "", notes: "", ...shared })) {
+    body.append(name, value);
+  }
+  for (const item of items) {
+    // As the form renders it: a new-category name only on a row creating one.
+    for (const name of ["itemName", "amount", "category"]) {
+      if (!item.skip?.includes(name)) body.append(name, item[name] ?? "");
+    }
+    if (item.category === "__create__") body.append("newCategoryName", item.newCategoryName);
+  }
+
+  const response = await fetch(`${BASE_URL}/expenses/new`, {
+    method: "POST",
+    headers: { cookie: cookieHeader(user) },
+    body,
+    redirect: "manual",
+  });
+
+  const text = await response.text();
+  const header = response.headers.get("location") ?? response.headers.get("x-action-redirect");
+  const embedded = text.match(/"(\/[a-z0-9/[\]-]*\?flash=[a-z-]+)"/i)?.[1];
+
+  return { status: response.status, redirect: header ?? embedded ?? null, text };
+}
+
 async function expensesOf(user) {
   const { data, error } = await user.db
     .from("expenses")
@@ -463,6 +505,73 @@ async function run() {
     const misc = expenses.find((e) => e.item_name === "Misc");
     assert(misc.category_id === null, "category_id should be null");
     assert(misc.payment_mode === null, "payment_mode should be null");
+  });
+
+  // -------------------------------------------------------------------------
+  group("Several items at once");
+
+  await check("several items are saved in one submission, sharing date, mode and notes", async () => {
+    const before = (await expensesOf(owner)).length;
+    const result = await addExpenses(
+      owner,
+      { expenseDate: TODAY, paymentMode: "cash", notes: "Market run" },
+      [
+        { itemName: "Apples", amount: "120", category: "__create__", newCategoryName: "Market" },
+        { itemName: "Bread", amount: "45.50", category: "name:Groceries" },
+        { itemName: "Flowers", amount: "200", category: "__create__", newCategoryName: "market" },
+      ],
+    );
+    assert(result.redirect === "/expenses?flash=expenses-created", `redirect ${result.redirect}`);
+
+    const expenses = await expensesOf(owner);
+    assert(expenses.length === before + 3, `expected 3 new expenses, got ${expenses.length - before}`);
+
+    const added = expenses.filter((e) => ["Apples", "Bread", "Flowers"].includes(e.item_name));
+    assert(added.length === 3, "not every item was stored");
+    for (const expense of added) {
+      assert(expense.expense_date === TODAY, `${expense.item_name}: date ${expense.expense_date}`);
+      assert(expense.payment_mode === "cash", `${expense.item_name}: mode ${expense.payment_mode}`);
+      assert(expense.notes === "Market run", `${expense.item_name}: notes ${expense.notes}`);
+      assert(expense.paid_by === owner.id && expense.user_id === owner.id, "wrong owner or payer");
+    }
+    assert(added.find((e) => e.item_name === "Bread").amount === 45.5, "Bread's amount is wrong");
+
+    const market = (await categoriesOf(owner)).filter((c) => c.name.toLowerCase() === "market");
+    assert(market.length === 1, `two rows naming one new category made ${market.length}`);
+    const apples = added.find((e) => e.item_name === "Apples");
+    const flowers = added.find((e) => e.item_name === "Flowers");
+    assert(
+      apples.category_id === market[0].id && flowers.category_id === market[0].id,
+      "both rows should share the new category",
+    );
+  });
+
+  await check("one invalid item rejects the whole submission", async () => {
+    const before = (await expensesOf(owner)).length;
+    const result = await addExpenses(owner, { expenseDate: TODAY }, [
+      { itemName: "Fine", amount: "10" },
+      { itemName: "Broken", amount: "-5" },
+    ]);
+    assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
+    assert((await expensesOf(owner)).length === before, "some items were saved anyway");
+  });
+
+  await check("rows whose fields do not line up are refused", async () => {
+    const before = (await expensesOf(owner)).length;
+    const result = await addExpenses(owner, { expenseDate: TODAY }, [
+      { itemName: "One", amount: "10" },
+      { itemName: "Two", amount: "20", skip: ["amount"] },
+    ]);
+    assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
+    assert((await expensesOf(owner)).length === before, "a misaligned form was saved");
+  });
+
+  await check("more than 20 items at once are refused", async () => {
+    const before = (await expensesOf(owner)).length;
+    const items = Array.from({ length: 21 }, (_, i) => ({ itemName: `Bulk ${i}`, amount: "1" }));
+    const result = await addExpenses(owner, { expenseDate: TODAY }, items);
+    assert(result.redirect === null, `it was accepted and redirected to ${result.redirect}`);
+    assert((await expensesOf(owner)).length === before, "an oversized batch was saved");
   });
 
   // -------------------------------------------------------------------------

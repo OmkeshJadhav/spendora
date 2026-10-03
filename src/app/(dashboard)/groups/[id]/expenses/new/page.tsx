@@ -73,6 +73,7 @@ export default async function NewGroupExpensePage(
             currencyCode={group.currency_code}
             serverToday={todayIso()}
             defaults={{ paidBy: user.id }}
+            multiple
             submitLabel="Save expense"
             cancelHref={`/groups/${group.id}/expenses`}
           />
